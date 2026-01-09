@@ -2,12 +2,9 @@
 const CONFIG = {
   GEMINI_API_KEY: PropertiesService.getScriptProperties().getProperty('GEMINI_API_KEY'),
   OPENAI_API_KEY: PropertiesService.getScriptProperties().getProperty('OPENAI_API_KEY'),
-  
-  // 🔴 IMPORTANTE: Reemplaza esto con el ID de texto de tu proyecto GCP (ej: 'anki-gen-ai-x82')
   GCP_PROJECT_ID: 'anki-gen-ai', 
-  
   AUDIO_FOLDER_ID: '1HKTOv1SwgP4HYmKwY6O7A0XQyvr7ihrA', // Tu carpeta de Audio
-  IMAGE_FOLDER_ID: '1TlEjDBQtyTYk0qBoalwkwCw3X8nA1Z4h'  // Tu carpeta de Imágenes (Link que enviaste)
+  IMAGE_FOLDER_ID: '1TlEjDBQtyTYk0qBoalwkwCw3X8nA1Z4h'  // Tu carpeta de Imágenes
 };
 
 // === 1. INITIALIZATION ===
@@ -26,85 +23,117 @@ function setupTrigger() {
     .create();
 }
 
-// === 2. MAIN PROCESSOR ===
+// === 2. MAIN PROCESSOR (SAFE MODE) ===
 function processFormSubmission(e) {
+  console.log("🏁 INICIANDO PROCESO BLINDADO...");
+  
+  // 1. Extracción de datos
+  let wordData;
   try {
-    const wordData = extractFormData(e);
-    if (!wordData.palabra) return;
+    wordData = extractFormData(e);
+    if (!wordData.palabra) { console.warn("⚠️ No se detectó palabra."); return; }
+    console.log(`📌 Procesando: "${wordData.palabra}"`);
+  } catch (err) {
+    console.error("❌ Error extrayendo datos:", err);
+    return;
+  }
 
-    // Usamos la nueva hoja V3 para soportar las nuevas columnas (Imágenes, Audio Contexto, Cloze)
-    const sheet = ensureAnkiSheet(); 
-    
-    // Verificación de duplicados
-    const existingWords = sheet.getRange("B:B").getValues().flat().map(w => w.toString().toLowerCase());
-    if (existingWords.includes(wordData.palabra.toLowerCase())) {
-      console.log(`⏭️ Saltando duplicado: ${wordData.palabra}`);
-      return;
-    }
+  // 2. CEREBRO (Gemini) - Crítico (Si falla esto, paramos)
+  let enriched;
+  try {
+    enriched = callGeminiAnalyst(wordData);
+    console.log("✅ Gemini: Datos generados correctamente.");
+  } catch (err) {
+    console.error("❌ ERROR CRÍTICO GEMINI:", err);
+    return; // Sin cerebro no hay tarjeta
+  }
 
-    // A. CEREBRO: Gemini procesa todo (Definición, Cloze, Frecuencia, Prompt de Imagen)
-    const enriched = callGeminiAnalyst(wordData);
-    
-    // B. VOZ: Generar Audios
-    // 1. Audio de la palabra (Siempre)
+  // 3. VOZ (OpenAI) - Opcional
+  try {
     const wordFilename = `word_${cleanFilename(wordData.palabra)}.mp3`;
     enriched.audioWord = callOpenAITTS(wordData.palabra, wordFilename);
-
-    // 2. Audio del Ejemplo (Solo si existe y NO es modo pronunciación)
+    
     if (enriched.ejemplo_raw && wordData.modo !== 'Solo Pronunciación') {
        const sentenceFilename = `sent_${cleanFilename(wordData.palabra)}.mp3`;
        enriched.audioSentence = callOpenAITTS(enriched.ejemplo_raw, sentenceFilename);
     } else {
        enriched.audioSentence = "";
     }
+    console.log("✅ Audio: Generado.");
+  } catch (err) {
+    console.error("⚠️ Error en Audio (Continuando sin audio):", err);
+    enriched.audioWord = "";
+    enriched.audioSentence = "";
+  }
 
-    // C. VISIÓN: Generar Imagen con Vertex AI (Solo Vocabulario General)
-    // Usamos tus créditos de GCP aquí.
+  // 4. VISIÓN (Vertex AI) - Opcional y Riesgoso
+  // Aquí es donde sospecho que ocurría el crash anterior
+  try {
     if (wordData.modo !== 'Solo Pronunciación' && enriched.image_prompt) {
+      console.log("🎨 Iniciando generación de imagen (Vertex AI)...");
       const imgFilename = `img_${cleanFilename(wordData.palabra)}.png`;
+      
+      // Verificamos acceso a carpeta antes de llamar a la IA
+      const folder = DriveApp.getFolderById(CONFIG.IMAGE_FOLDER_ID); 
+      
       enriched.image = callVertexAIImage(enriched.image_prompt, imgFilename);
+      console.log("✅ Imagen: Generada y guardada.");
     } else {
       enriched.image = "";
     }
+  } catch (err) {
+    console.error("⚠️ Error en Imagen (Continuando sin imagen):", err.toString());
+    enriched.image = ""; // Dejamos la imagen vacía para no romper la tarjeta
+  }
 
-    // D. BASE DE DATOS: Guardar
+  // 5. BASE DE DATOS (Sheets)
+  try {
     addToAnkiSheet(enriched);
-    
-  } catch (error) {
-    console.error('❌ Error Critical:', error.toString());
+    console.log("🎉 ÉXITO: Tarjeta guardada en Sheets.");
+  } catch (err) {
+    console.error("❌ Error guardando en Sheets:", err);
   }
 }
 
-// === 3. GEMINI ANALYST (LOGIC CORE V3) - CORREGIDO ===
+// === 3. GEMINI ANALYST (LOGIC CORE V3) - VERSIÓN 2026 STABLE ===
 function callGeminiAnalyst(wordData) {
-  // Usamos el modelo experimental. Si falla, el script ahora nos dirá por qué.
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key=${CONFIG.GEMINI_API_KEY}`;
+  // ✅ USAMOS EL MODELO ESTABLE QUE APARECIÓ EN TU LISTA
+  // "gemini-2.5-flash" es rápido, inteligente y estable.
+  const modelVersion = 'gemini-2.5-flash'; 
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelVersion}:generateContent?key=${CONFIG.GEMINI_API_KEY}`;
 
   let promptText = "";
   
+  // Prompt ajustado: Directo y sin espacio para alucinaciones
   if (wordData.modo === 'Solo Pronunciación') {
     promptText = `
-      Analyze the word: "${wordData.palabra}". Context: "${wordData.contexto}".
-      Goal: Pronunciation mastery.
-      Return JSON:
-      - definition: IPA transcription.
-      - example: A short technical tip about stress or sound linking.
-      - example_raw: null
-      - type: Grammatical type.
-      - frequency_tag: "#Pronunciation"
-      - image_prompt: null
+      You are a linguistic database. Analyze: "${wordData.palabra}". Context: "${wordData.contexto}".
+      Task: Provide pronunciation data.
+      Output strictly valid JSON.
+      JSON Schema:
+      {
+        "definition": "IPA transcription only",
+        "example": "1 sentence tip about pronunciation/stress",
+        "example_raw": null,
+        "type": "Part of speech",
+        "frequency_tag": "#Pronunciation",
+        "image_prompt": null
+      }
     `;
   } else {
     promptText = `
-      Analyze the word: "${wordData.palabra}". Context: "${wordData.contexto}".
-      Goal: Create an Anki card for an advanced learner.
-      Return JSON:
-      - definition: Clear English definition.
-      - example: An original sentence using the word, but format it strictly as an Anki Cloze deletion (e.g., "The {{c1::apple}} is red").
-      - example_raw: The same sentence but clean text (for Audio generation).
-      - type: Grammatical type.
-      - frequency_tag: The CEFR level (e.g., "#CEFR_B2", "#CEFR_C1") and a rarity tag if applicable (e.g., "#Academic", "#Slang").
-      - image_prompt: A detailed prompt to generate a minimalist, vector-style illustration representing this word.
+      You are a linguistic database. Analyze: "${wordData.palabra}". Context: "${wordData.contexto}".
+      Task: Create data for an Anki card (Advanced English).
+      Output strictly valid JSON.
+      JSON Schema:
+      {
+        "definition": "Concise definition (max 15 words).",
+        "example": "Sentence with Anki cloze format: 'The {{c1::word}} ...'",
+        "example_raw": "The same sentence as plain text.",
+        "type": "Part of speech (e.g. noun, verb).",
+        "frequency_tag": "CEFR Level (e.g. #CEFR_C1).",
+        "image_prompt": "Minimalist vector illustration description."
+      }
     `;
   }
 
@@ -112,45 +141,36 @@ function callGeminiAnalyst(wordData) {
     contents: [{ parts: [{ text: promptText }] }],
     generationConfig: { 
       responseMimeType: "application/json",
-      responseSchema: {
-        type: "object",
-        properties: {
-          definition: {type: "string"},
-          example: {type: "string"},
-          example_raw: {type: "string", nullable: true},
-          type: {type: "string"},
-          frequency_tag: {type: "string"},
-          image_prompt: {type: "string", nullable: true}
-        }
-      }
+      temperature: 0.1,    // 🥶 Temperatura muy baja = Máxima precisión, cero creatividad loca
     }
   };
 
-  // 👇 AQUÍ ESTÁ EL CAMBIO CRUCIAL PARA EVITAR EL CRASH GENÉRICO 👇
   const options = {
     method: 'post', 
     contentType: 'application/json', 
     payload: JSON.stringify(payload),
-    muteHttpExceptions: true // <--- Esto evita que el script explote en silencio
+    muteHttpExceptions: true
   };
 
   const response = UrlFetchApp.fetch(url, options);
 
-  // Verificación de Errores Específica
+  // Validación de respuesta HTTP
   if (response.getResponseCode() !== 200) {
-    console.error(`❌ Error Gemini (${response.getResponseCode()}): ${response.getContentText()}`);
-    throw new Error(`Gemini API falló: ${response.getContentText()}`);
+    console.error(`❌ Error Gemini API (${response.getResponseCode()}): ${response.getContentText()}`);
+    throw new Error(`Gemini Falló: ${response.getContentText()}`);
   }
 
   try {
     const jsonResponse = JSON.parse(response.getContentText());
     
-    // Verificamos si Gemini devolvió candidatos válidos
+    // Validación de estructura de respuesta de Gemini
     if (!jsonResponse.candidates || !jsonResponse.candidates[0].content) {
-      throw new Error("Gemini no devolvió candidatos válidos.");
+      console.warn("⚠️ Respuesta vacía de Gemini:", response.getContentText());
+      throw new Error("Gemini no devolvió contenido.");
     }
 
-    const result = JSON.parse(jsonResponse.candidates[0].content.parts[0].text);
+    const textContent = jsonResponse.candidates[0].content.parts[0].text;
+    const result = JSON.parse(textContent);
 
     return {
       ...wordData, 
@@ -163,7 +183,8 @@ function callGeminiAnalyst(wordData) {
       tag_mode: wordData.modo === 'Solo Pronunciación' ? 'pronunciation' : 'general_vocab'
     };
   } catch (e) {
-    console.error("Error parseando respuesta de Gemini:", response.getContentText());
+    console.error("❌ Error procesando JSON final:", e);
+    console.error("Respuesta cruda recibida:", response.getContentText());
     throw e;
   }
 }
@@ -315,4 +336,22 @@ function prepareAnkiExportV3() {
   
   exportSheet.activate();
   SpreadsheetApp.getUi().alert(`✅ Datos listos en 'Anki_Import_Ready'. Exporta esta hoja como CSV.`);
+}
+
+// === DEBUGGING / TEST ===
+function testManualSubmission() {
+  // Simulamos los datos que enviaría el formulario
+  const mockEvent = {
+    namedValues: {
+      'Palabra o frase que quieres aprender': ['ephemeral'], // Cambia esto para probar otras palabras
+      'Contexto u oración donde la viste (opcional)': ['The ephemeral joys of childhood.'],
+      'Tipo de palabra (opcional)': ['adjective'],
+      'Modo de Estudio': ['Vocabulario General'] 
+    }
+  };
+
+  console.log("🧪 Iniciando prueba manual...");
+  
+  // Llamamos a la función principal pasándole los datos falsos
+  processFormSubmission(mockEvent);
 }
