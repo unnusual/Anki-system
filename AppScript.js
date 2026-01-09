@@ -75,9 +75,9 @@ function processFormSubmission(e) {
   }
 }
 
-// === 3. GEMINI ANALYST (LOGIC CORE V3) ===
+// === 3. GEMINI ANALYST (LOGIC CORE V3) - CORREGIDO ===
 function callGeminiAnalyst(wordData) {
-  // Usamos el modelo experimental o 1.5-flash que es rápido y soporta JSON complejo
+  // Usamos el modelo experimental. Si falla, el script ahora nos dirá por qué.
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key=${CONFIG.GEMINI_API_KEY}`;
 
   let promptText = "";
@@ -95,7 +95,6 @@ function callGeminiAnalyst(wordData) {
       - image_prompt: null
     `;
   } else {
-    // MODO VOCABULARIO (Con Cloze y Frecuencia)
     promptText = `
       Analyze the word: "${wordData.palabra}". Context: "${wordData.contexto}".
       Goal: Create an Anki card for an advanced learner.
@@ -127,22 +126,46 @@ function callGeminiAnalyst(wordData) {
     }
   };
 
-  const response = UrlFetchApp.fetch(url, {
-    method: 'post', contentType: 'application/json', payload: JSON.stringify(payload)
-  });
-
-  const result = JSON.parse(JSON.parse(response.getContentText()).candidates[0].content.parts[0].text);
-
-  return {
-    ...wordData, 
-    definicion: result.definition,
-    ejemplo: result.example,     // Versión Cloze {{c1::word}}
-    ejemplo_raw: result.example_raw, // Versión Limpia para TTS
-    tipo: result.type,
-    tags: result.frequency_tag,
-    image_prompt: result.image_prompt,
-    tag_mode: wordData.modo === 'Solo Pronunciación' ? 'pronunciation' : 'general_vocab'
+  // 👇 AQUÍ ESTÁ EL CAMBIO CRUCIAL PARA EVITAR EL CRASH GENÉRICO 👇
+  const options = {
+    method: 'post', 
+    contentType: 'application/json', 
+    payload: JSON.stringify(payload),
+    muteHttpExceptions: true // <--- Esto evita que el script explote en silencio
   };
+
+  const response = UrlFetchApp.fetch(url, options);
+
+  // Verificación de Errores Específica
+  if (response.getResponseCode() !== 200) {
+    console.error(`❌ Error Gemini (${response.getResponseCode()}): ${response.getContentText()}`);
+    throw new Error(`Gemini API falló: ${response.getContentText()}`);
+  }
+
+  try {
+    const jsonResponse = JSON.parse(response.getContentText());
+    
+    // Verificamos si Gemini devolvió candidatos válidos
+    if (!jsonResponse.candidates || !jsonResponse.candidates[0].content) {
+      throw new Error("Gemini no devolvió candidatos válidos.");
+    }
+
+    const result = JSON.parse(jsonResponse.candidates[0].content.parts[0].text);
+
+    return {
+      ...wordData, 
+      definicion: result.definition,
+      ejemplo: result.example,     
+      ejemplo_raw: result.example_raw, 
+      tipo: result.type,
+      tags: result.frequency_tag,
+      image_prompt: result.image_prompt,
+      tag_mode: wordData.modo === 'Solo Pronunciación' ? 'pronunciation' : 'general_vocab'
+    };
+  } catch (e) {
+    console.error("Error parseando respuesta de Gemini:", response.getContentText());
+    throw e;
+  }
 }
 
 // === 4. VERTEX AI (IMAGEN 3) - USANDO GCP CREDITS ===
