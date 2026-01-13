@@ -11,7 +11,7 @@ const CONFIG = {
 function initializeSystem() {
   ensureAnkiSheet();
   setupTrigger();
-  console.log('🚀 Sistema V3.6 Clean DB Listo: Nombres limpios en Sheet, Etiquetas en Export.');
+  console.log('🚀 Sistema V3.7 Strict Tags: Solo "general_vocab" o "pronunciation".');
 }
 
 function setupTrigger() {
@@ -38,7 +38,7 @@ function saveFileToDrive(blob, filename, folderId) {
 
 // === 2. MAIN PROCESSOR ===
 function processFormSubmission(e) {
-  console.log("🏁 INICIANDO PROCESO V3.6...");
+  console.log("🏁 INICIANDO PROCESO V3.7...");
   
   // 1. Extracción
   let wordData;
@@ -104,12 +104,14 @@ function processFormSubmission(e) {
   } catch (err) { console.error("❌ Error Sheets:", err); }
 }
 
-// === 3. GEMINI ANALYST (Mantiene lógica de seguridad V3.2) ===
+// === 3. GEMINI ANALYST (STRICT TAGS V3.7) ===
 function callGeminiAnalyst(wordData) {
   const modelVersion = 'gemini-2.5-flash'; 
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelVersion}:generateContent?key=${CONFIG.GEMINI_API_KEY}`;
 
   let promptText = "";
+  
+  // PROMPT UNIFICADO CON TAGS BLOQUEADOS A NULL
   if (wordData.modo === 'Solo Pronunciación') {
     promptText = `
       You are a linguistic engine. Analyze: "${wordData.palabra}". Context: "${wordData.contexto}".
@@ -119,21 +121,19 @@ function callGeminiAnalyst(wordData) {
         "example": "Tip about stress/linking",
         "example_raw": null,
         "type": "Part of speech",
-        "frequency_tag": null,
+        "frequency_tag": null, 
         "image_prompt": null
       }
     `;
   } else {
-    // Prompt optimizado para iconos vectoriales y seguridad
     promptText = `
       You are a linguistic engine. Analyze: "${wordData.palabra}". Context: "${wordData.contexto}".
       Task: Create Anki card. Output JSON.
       
       CRITICAL FOR IMAGE_PROMPT: 
       - Create a SAFE, MINIMALIST vector icon description.
-      - Abstract metaphors are preferred (e.g., "Shield" for Resilience).
-      - PEOPLE: You MAY describe generic people/professions ONLY if describing a "vector icon" or "silhouette".
-      - AVOID: "Photo", "Realistic", "Face", "Specific celebrity".
+      - Abstract metaphors preferred.
+      - AVOID: "Photo", "Realistic", "Face".
       - FORBIDDEN: Violence, weapons, blood, storms, disasters.
 
       JSON Schema:
@@ -142,7 +142,7 @@ function callGeminiAnalyst(wordData) {
         "example": "Sentence with Anki cloze: 'The {{c1::word}} ...'",
         "example_raw": "Same sentence plain text for Audio TTS.",
         "type": "Part of speech.",
-        "frequency_tag": "Thematic tag (e.g. #Business) or null. No CEFR.",
+        "frequency_tag": null, 
         "image_prompt": "Safe, minimalist vector icon description."
       }
     `;
@@ -168,13 +168,14 @@ function callGeminiAnalyst(wordData) {
     ejemplo: result.example,     
     ejemplo_raw: result.example_raw, 
     tipo: result.type,
-    tags: result.frequency_tag || null,
+    // Forzamos tags a null, la lógica real está en addToAnkiSheet
+    tags: null,
     image_prompt: result.image_prompt,
     tag_mode: wordData.modo === 'Solo Pronunciación' ? 'pronunciation' : 'general_vocab'
   };
 }
 
-// === 4. VERTEX AI (MODIFICADO: Retorna solo filename) ===
+// === 4. VERTEX AI (Retorna filename) ===
 function callVertexAIImage(prompt, filename) {
   if (!CONFIG.GCP_PROJECT_ID) return "";
   const location = 'us-central1'; 
@@ -203,15 +204,13 @@ function callVertexAIImage(prompt, filename) {
     if (json.predictions && json.predictions[0] && json.predictions[0].bytesBase64Encoded) {
       const blob = Utilities.newBlob(Utilities.base64Decode(json.predictions[0].bytesBase64Encoded), 'image/png', filename);
       saveFileToDrive(blob, filename, CONFIG.IMAGE_FOLDER_ID);
-      
-      // 👇 CAMBIO V3.6: Retornamos solo el nombre limpio del archivo
       return filename; 
     }
   } catch (e) { console.error("Excepción imagen:", e.toString()); }
   return "";
 }
 
-// === 5. OPENAI TTS (MODIFICADO: Retorna solo filename) ===
+// === 5. OPENAI TTS (Retorna filename) ===
 function callOpenAITTS(text, filename) {
   if (!text) return "";
   const url = "https://api.openai.com/v1/audio/speech";
@@ -226,19 +225,17 @@ function callOpenAITTS(text, filename) {
 
   const blob = response.getBlob().setName(filename);
   saveFileToDrive(blob, filename, CONFIG.AUDIO_FOLDER_ID);
-  
-  // 👇 CAMBIO V3.6: Retornamos solo el nombre limpio
   return filename;
 }
 
-// === UTILS, SHEETS & EXPORT (LA MAGIA DE V3.6) ===
+// === UTILS, SHEETS & EXPORT ===
 
 function cleanFilename(text) {
   return text.replace(/[^a-z0-9]/gi, '_').toLowerCase().substring(0, 15) + "_" + Utilities.getUuid().substring(0,4);
 }
 
 function extractFormData(e) {
-  if (!e || !e.namedValues) return { palabra: "TEST_CLEAN", contexto: "Test context", modo: "Vocabulario General" };
+  if (!e || !e.namedValues) return { palabra: "TEST_STRICT", contexto: "Test context", modo: "Vocabulario General" };
   const vals = e.namedValues;
   return {
     palabra: vals['Palabra o frase que quieres aprender'] ? vals['Palabra o frase que quieres aprender'][0].trim() : '',
@@ -265,9 +262,11 @@ function ensureAnkiSheet() {
 
 function addToAnkiSheet(data) {
   const sheet = ensureAnkiSheet();
-  let tagsClean = `${data.tag_mode} ${data.tags || ''}`.replace(/\s+/g, ' ').trim().replace('null', '');
+  
+  // 🛑 CAMBIO CLAVE V3.7: Ignoramos cualquier tag de la IA.
+  // Solo usamos el modo que viene del formulario.
+  const finalTag = data.tag_mode; 
 
-  // Aquí se guardan los datos LIMPIOS (ej: word.mp3, imagen.png)
   sheet.appendRow([
     Utilities.getUuid().substring(0, 8),
     new Date().toLocaleDateString(),
@@ -277,14 +276,14 @@ function addToAnkiSheet(data) {
     data.contexto,
     data.tipo,
     'NO',
-    tagsClean,
-    data.audioWord,     // Limpio
-    data.image,         // Limpio
-    data.audioSentence  // Limpio
+    finalTag,           // Solo 'general_vocab' o 'pronunciation'
+    data.audioWord,
+    data.image,
+    data.audioSentence
   ]);
 }
 
-// ✅ EXPORTACIÓN INTELIGENTE: Reconstruye las etiquetas para Anki
+// ✅ EXPORTACIÓN (V3.6 Logic maintained)
 function onOpen() {
   SpreadsheetApp.getUi().createMenu('🗂️ Anki Tools')
     .addItem('Prepare New Words for Export', 'prepareAnkiExport')
@@ -314,10 +313,7 @@ function prepareAnkiExport() {
   const exportHeaders = ['ID', 'Word', 'Definition', 'Example', 'Context', 'Type', 'Tags', 'Audio_Word', 'Image', 'Audio_Sentence'];
   exportSheet.getRange(1, 1, 1, exportHeaders.length).setValues([exportHeaders]).setFontWeight('bold');
   
-  // Indices (V3.1): Word(2), Def(3), Ex(4), Ctx(5), Type(6), Tags(8), AudW(9), Img(10), AudS(11)
   const rowsToExport = newWords.map(r => {
-    // 🪄 MAGIA V3.6: Aquí reconstruimos las etiquetas para Anki
-    // Si la celda tiene texto, le ponemos el wrapper adecuado.
     const audioWordTag = r[9] ? `[sound:${r[9]}]` : "";
     const imageTag = r[10] ? `<img src="${r[10]}">` : "";
     const audioSentTag = r[11] ? `[sound:${r[11]}]` : "";
@@ -329,10 +325,10 @@ function prepareAnkiExport() {
       r[4], // Example
       r[5], // Context
       r[6], // Type
-      r[8], // Tags
-      audioWordTag, // Audio Word (Con etiqueta)
-      imageTag,     // Image (Con etiqueta)
-      audioSentTag  // Audio Sent (Con etiqueta)
+      r[8], // Tags (Ya vendrá limpio desde la hoja Anki)
+      audioWordTag,
+      imageTag,
+      audioSentTag
     ];
   });
   
@@ -345,18 +341,18 @@ function prepareAnkiExport() {
   }
 
   exportSheet.activate();
-  SpreadsheetApp.getUi().alert(`✅ Export listo. Hoja 'Anki' tiene nombres limpios, hoja 'Anki_Export' tiene etiquetas.`);
+  SpreadsheetApp.getUi().alert(`✅ Export listo.`);
 }
 
 function testManualSubmission() {
   const mockEvent = {
     namedValues: {
-      'Palabra o frase que quieres aprender': ['test_clean_v36'], 
-      'Contexto u oración donde la viste (opcional)': ['Testing the V3.6 clean format.'],
+      'Palabra o frase que quieres aprender': ['strict_test'], 
+      'Contexto u oración donde la viste (opcional)': ['Testing strict tags.'],
       'Tipo de palabra (opcional)': ['noun'],
       'Modo de Estudio': ['Vocabulario General'] 
     }
   };
-  console.log("🧪 Iniciando prueba V3.6...");
+  console.log("🧪 Iniciando prueba V3.7...");
   processFormSubmission(mockEvent);
 }
