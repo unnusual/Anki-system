@@ -11,7 +11,7 @@ const CONFIG = {
 function initializeSystem() {
   ensureAnkiSheet();
   setupTrigger();
-  console.log('🚀 Sistema V3.1 Classic Listo: Estética original con Media al final.');
+  console.log('🚀 Sistema V3.2 Refined Classic Listo: Imágenes mejoradas, sin CEFR y menú restaurado.');
 }
 
 function setupTrigger() {
@@ -38,7 +38,7 @@ function saveFileToDrive(blob, filename, folderId) {
 
 // === 2. MAIN PROCESSOR ===
 function processFormSubmission(e) {
-  console.log("🏁 INICIANDO PROCESO V3.1 CLASSIC...");
+  console.log("🏁 INICIANDO PROCESO V3.2...");
   
   // 1. Extracción
   let wordData;
@@ -48,9 +48,9 @@ function processFormSubmission(e) {
     console.log(`📌 Procesando: "${wordData.palabra}"`);
   } catch (err) { console.error("❌ Error Data:", err); return; }
 
-  // 1.5 VALIDACIÓN DE DUPLICADOS (Ajustado a formato Clásico)
+  // 1.5 VALIDACIÓN DE DUPLICADOS (Formato Clásico)
   const sheet = ensureAnkiSheet();
-  // En formato Clásico (ID, Date, Word...), la palabra está en la Columna C (3)
+  // En formato Clásico la palabra está en la Columna C (índice 2, pero getRange usa 1-based, o sea C)
   const existingWords = sheet.getRange("C:C").getValues().flat()
     .filter(cell => cell !== "") 
     .map(w => w.toString().toLowerCase());
@@ -64,7 +64,7 @@ function processFormSubmission(e) {
   let enriched;
   try {
     enriched = callGeminiAnalyst(wordData);
-    console.log("✅ Gemini: Datos listos.");
+    console.log("✅ Gemini: Datos listos (Sin CEFR).");
   } catch (err) { console.error("❌ ERROR GEMINI:", err); return; }
 
   // 3. AUDIO (OpenAI - Dual Channel)
@@ -88,8 +88,9 @@ function processFormSubmission(e) {
 
   // 4. IMAGEN (Vertex AI)
   try {
+    // ✅ CONFIRMACIÓN PUNTO 3: Este IF asegura que NO se genera imagen en modo pronunciación
     if (wordData.modo !== 'Solo Pronunciación' && enriched.image_prompt) {
-      console.log("🎨 Generando imagen...");
+      console.log("🎨 Generando imagen mejorada...");
       const imgFilename = `img_${cleanFilename(wordData.palabra)}.png`;
       enriched.image = callVertexAIImage(enriched.image_prompt, imgFilename);
     } else {
@@ -103,11 +104,11 @@ function processFormSubmission(e) {
   // 5. GUARDAR
   try {
     addToAnkiSheet(enriched);
-    console.log("🎉 ÉXITO TOTAL: Tarjeta creada en hoja 'Anki'.");
+    console.log("🎉 ÉXITO TOTAL: Tarjeta guardada.");
   } catch (err) { console.error("❌ Error Sheets:", err); }
 }
 
-// === 3. GEMINI ANALYST (2.5 FLASH) ===
+// === 3. GEMINI ANALYST (SAFETY OPTIMIZED V3.3) ===
 function callGeminiAnalyst(wordData) {
   const modelVersion = 'gemini-2.5-flash'; 
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelVersion}:generateContent?key=${CONFIG.GEMINI_API_KEY}`;
@@ -122,21 +123,33 @@ function callGeminiAnalyst(wordData) {
         "example": "Tip about stress/linking",
         "example_raw": null,
         "type": "Part of speech",
-        "frequency_tag": "#Pronunciation",
+        "frequency_tag": null,
         "image_prompt": null
       }
     `;
   } else {
+    // 👇 AQUÍ ESTÁ EL TRUCO: Instrucciones de seguridad para el prompt de imagen
     promptText = `
       You are a linguistic engine. Analyze: "${wordData.palabra}". Context: "${wordData.contexto}".
       Task: Create Anki card. Output JSON.
+      
+      CRITICAL FOR IMAGE_PROMPT: 
+      - We need a SAFE, STATIC, MINIMALIST vector icon.
+      - FORCE A NOUN-BASED METAPHOR. Do not describe actions.
+      - FORBIDDEN CONCEPTS: Bending, breaking, pressure, storms, force, destruction, collapsing, bodies.
+      - GOOD EXAMPLES: 
+        * For "Resilience" -> "A heavy iron shield" or "A diamond" or "A thick castle wall".
+        * For "Ephemeral" -> "A soap bubble" or "An hourglass".
+      - Keep it geometric and inanimate.
+
+      JSON Schema:
       {
         "definition": "Concise definition (max 15 words).",
         "example": "Sentence with Anki cloze: 'The {{c1::word}} ...'",
         "example_raw": "Same sentence plain text for Audio TTS.",
         "type": "Part of speech.",
-        "frequency_tag": "CEFR Level (e.g. #CEFR_B2).",
-        "image_prompt": "Minimalist vector illustration description, flat design, white background."
+        "frequency_tag": "Thematic tag (e.g. #Business) or null. No CEFR.",
+        "image_prompt": "Safe, static, object-based minimalist vector icon description."
       }
     `;
   }
@@ -161,22 +174,31 @@ function callGeminiAnalyst(wordData) {
     ejemplo: result.example,     
     ejemplo_raw: result.example_raw, 
     tipo: result.type,
-    tags: result.frequency_tag,
+    tags: result.frequency_tag || null,
     image_prompt: result.image_prompt,
     tag_mode: wordData.modo === 'Solo Pronunciación' ? 'pronunciation' : 'general_vocab'
   };
 }
 
-// === 4. VERTEX AI (IMAGEN) ===
+// === 4. VERTEX AI (IMAGEN - VERSIÓN LIMPIA V3.5) ===
 function callVertexAIImage(prompt, filename) {
   if (!CONFIG.GCP_PROJECT_ID) return "";
+  
   const location = 'us-central1'; 
   const modelId = 'imagegeneration@005'; 
   const endpoint = `https://${location}-aiplatform.googleapis.com/v1/projects/${CONFIG.GCP_PROJECT_ID}/locations/${location}/publishers/google/models/${modelId}:predict`;
 
+  // Prompt sistema simplificado. 
+  // Nota: Vertex suele bloquear "personas reales" (fotorealismo), pero acepta "iconos de personas".
+  const systemPrompt = ", vector art style, minimalist, white background.";
+  
   const payload = {
-    instances: [{ prompt: prompt + ", minimalist vector art, flat design, white background, high quality" }],
-    parameters: { sampleCount: 1, aspectRatio: "1:1" }
+    instances: [{ prompt: prompt + systemPrompt }],
+    parameters: { 
+      sampleCount: 1, 
+      aspectRatio: "1:1" 
+      // ❌ ELIMINADO: safetySetting (Esto estaba causando el bloqueo del diamante)
+    }
   };
 
   const options = {
@@ -187,14 +209,27 @@ function callVertexAIImage(prompt, filename) {
     muteHttpExceptions: true
   };
 
-  const response = UrlFetchApp.fetch(endpoint, options);
-  if (response.getResponseCode() !== 200) { console.error("Vertex AI Error:", response.getContentText()); return ""; }
+  try {
+    const response = UrlFetchApp.fetch(endpoint, options);
+    
+    if (response.getResponseCode() === 400) {
+       console.warn(`⚠️ Imagen Bloqueada (Prompt: "${prompt}"). El filtro sigue sensible.`);
+       return ""; 
+    }
+    
+    if (response.getResponseCode() !== 200) {
+       console.error(`❌ Vertex Error (${response.getResponseCode()}):`, response.getContentText());
+       return "";
+    }
 
-  const json = JSON.parse(response.getContentText());
-  if (json.predictions && json.predictions[0] && json.predictions[0].bytesBase64Encoded) {
-    const blob = Utilities.newBlob(Utilities.base64Decode(json.predictions[0].bytesBase64Encoded), 'image/png', filename);
-    saveFileToDrive(blob, filename, CONFIG.IMAGE_FOLDER_ID);
-    return `<img src="${filename}">`; 
+    const json = JSON.parse(response.getContentText());
+    if (json.predictions && json.predictions[0] && json.predictions[0].bytesBase64Encoded) {
+      const blob = Utilities.newBlob(Utilities.base64Decode(json.predictions[0].bytesBase64Encoded), 'image/png', filename);
+      saveFileToDrive(blob, filename, CONFIG.IMAGE_FOLDER_ID);
+      return `<img src="${filename}">`; 
+    }
+  } catch (e) {
+    console.error("Excepción imagen:", e.toString());
   }
   return "";
 }
@@ -217,14 +252,14 @@ function callOpenAITTS(text, filename) {
   return `[sound:${filename}]`;
 }
 
-// === UTILS & SHEETS (ESTRUCTURA CLÁSICA) ===
+// === UTILS, SHEETS & MENUS ===
 
 function cleanFilename(text) {
   return text.replace(/[^a-z0-9]/gi, '_').toLowerCase().substring(0, 15) + "_" + Utilities.getUuid().substring(0,4);
 }
 
 function extractFormData(e) {
-  if (!e || !e.namedValues) return { palabra: "TEST_CLASSIC", contexto: "Test context", modo: "Vocabulario General" };
+  if (!e || !e.namedValues) return { palabra: "TEST_REFINE", contexto: "Test context", modo: "Vocabulario General" };
   const vals = e.namedValues;
   return {
     palabra: vals['Palabra o frase que quieres aprender'] ? vals['Palabra o frase que quieres aprender'][0].trim() : '',
@@ -236,31 +271,24 @@ function extractFormData(e) {
 
 function ensureAnkiSheet() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
-  // Volvemos a la hoja original 'Anki'
   let sheet = ss.getSheetByName('Anki'); 
-  
-  if (!sheet) {
-    sheet = ss.insertSheet('Anki');
-  }
+  if (!sheet) { sheet = ss.insertSheet('Anki'); }
 
-  // Definimos los Headers Clásicos + Media al Final
-  // A(1)  B(2)  C(3)  D(4)        E(5)     F(6)     G(7)  H(8)      I(9)  J(10)       K(11)  L(12)
+  // Headers Clásicos + Media al Final
+  // Índices: 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11
   const headers = ['ID', 'Date', 'Word', 'Definition', 'Example', 'Context', 'Type', 'Imported', 'Tags', 'Audio_Word', 'Image', 'Audio_Sentence'];
   
-  // Si la primera fila está vacía o no coincide, la reescribimos para asegurar el orden
   const firstCell = sheet.getRange(1, 1).getValue();
   if (firstCell === "" || firstCell !== 'ID') {
     sheet.getRange(1, 1, 1, headers.length).setValues([headers])
          .setFontWeight('bold').setBackground('#0d47a1').setFontColor('white');
     sheet.setFrozenRows(1);
   } else {
-    // Si ya existe, verificamos si tiene las nuevas columnas de media al final
-    // Si no las tiene, las agregamos (Solo los headers)
+    // Asegurar que existen las columnas de media si la hoja ya existía
     const lastCol = sheet.getLastColumn();
     if (lastCol < 12) {
-       sheet.getRange(1, 10).setValue('Audio_Word').setFontWeight('bold').setBackground('#0d47a1').setFontColor('white');
-       sheet.getRange(1, 11).setValue('Image').setFontWeight('bold').setBackground('#0d47a1').setFontColor('white');
-       sheet.getRange(1, 12).setValue('Audio_Sentence').setFontWeight('bold').setBackground('#0d47a1').setFontColor('white');
+       sheet.getRange(1, 10, 1, 3).setValues([['Audio_Word', 'Image', 'Audio_Sentence']])
+            .setFontWeight('bold').setBackground('#0d47a1').setFontColor('white');
     }
   }
   return sheet;
@@ -269,9 +297,10 @@ function ensureAnkiSheet() {
 function addToAnkiSheet(data) {
   const sheet = ensureAnkiSheet();
   
-  let tagsClean = `${data.tag_mode} ${data.tags || ''}`.replace(/\s+/g, ' ').trim();
+  // Limpieza de tags: Solo modo + tag temático (si existe)
+  let tagsClean = `${data.tag_mode} ${data.tags || ''}`;
+  tagsClean = tagsClean.replace(/\s+/g, ' ').trim().replace('null', '');
 
-  // Mapeo Clásico
   sheet.appendRow([
     Utilities.getUuid().substring(0, 8), // ID
     new Date().toLocaleDateString(),     // Date
@@ -282,9 +311,74 @@ function addToAnkiSheet(data) {
     data.tipo,                           // Type
     'NO',                                // Imported
     tagsClean,                           // Tags
-    // --- MEDIA AL FINAL ---
     data.audioWord,                      // Audio_Word
     data.image,                          // Image
     data.audioSentence                   // Audio_Sentence
   ]);
+}
+
+// ✅ PUNTO 4: Menú y Función de Exportación Restaurados y Actualizados
+function onOpen() {
+  SpreadsheetApp.getUi().createMenu('🗂️ Anki Tools')
+    .addItem('Prepare New Words for Export', 'prepareAnkiExport')
+    .addToUi();
+}
+
+function prepareAnkiExport() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sourceSheet = ss.getSheetByName('Anki');
+  if (!sourceSheet) { SpreadsheetApp.getUi().alert("No 'Anki' sheet found."); return; }
+
+  const data = sourceSheet.getDataRange().getValues();
+  const headers = data[0];
+  // Buscamos dinámicamente la columna 'Imported' por si acaso
+  const statusIdx = headers.indexOf('Imported'); 
+  
+  if (statusIdx === -1) { SpreadsheetApp.getUi().alert("Column 'Imported' not found."); return; }
+
+  // Filtramos filas donde Imported sea 'NO' (ignorando el header)
+  const newWords = data.filter((row, index) => index > 0 && row[statusIdx] === 'NO');
+  
+  if (newWords.length === 0) {
+    SpreadsheetApp.getUi().alert('No new words to export.');
+    return;
+  }
+
+  let exportSheet = ss.getSheetByName('Anki_Export') || ss.insertSheet('Anki_Export');
+  exportSheet.clear();
+  
+  // Headers para el CSV de exportación (Coinciden con el Note Type de Anki)
+  const exportHeaders = ['ID', 'Word', 'Definition', 'Example', 'Context', 'Type', 'Tags', 'Audio_Word', 'Image', 'Audio_Sentence'];
+  exportSheet.getRange(1, 1, 1, exportHeaders.length).setValues([exportHeaders]).setFontWeight('bold');
+  
+  // Mapeo de datos basado en los índices de la hoja 'Anki' V3.1 Classic:
+  // ID(0), Word(2), Def(3), Ex(4), Ctx(5), Type(6), Tags(8), AudW(9), Img(10), AudS(11)
+  const rowsToExport = newWords.map(r => [r[0], r[2], r[3], r[4], r[5], r[6], r[8], r[9], r[10], r[11]]);
+  
+  exportSheet.getRange(2, 1, rowsToExport.length, exportHeaders.length).setValues(rowsToExport);
+
+  // Marcar como importados en la hoja original
+  for (let i = 2; i <= sourceSheet.getLastRow(); i++) {
+    // Usamos statusIdx + 1 porque getRange usa índice 1-based
+    if (sourceSheet.getRange(i, statusIdx + 1).getValue() === 'NO') {
+      sourceSheet.getRange(i, statusIdx + 1).setValue('YES');
+    }
+  }
+
+  exportSheet.activate();
+  SpreadsheetApp.getUi().alert(`✅ Export preparado con ${newWords.length} palabras. Descarga esta hoja como CSV.`);
+}
+
+// === DEBUGGING ===
+function testManualSubmission() {
+  const mockEvent = {
+    namedValues: {
+      'Palabra o frase que quieres aprender': ['resilience'], 
+      'Contexto u oración donde la viste (opcional)': ['The community showed remarkable resilience after the storm.'],
+      'Tipo de palabra (opcional)': ['noun'],
+      'Modo de Estudio': ['Vocabulario General'] 
+    }
+  };
+  console.log("🧪 Iniciando prueba V3.2 Refined...");
+  processFormSubmission(mockEvent);
 }
