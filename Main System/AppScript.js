@@ -122,7 +122,7 @@ function processFormSubmission(e) {
 
 // === 3. GEMINI ANALYST ===
 function callGeminiAnalyst(wordData) {
-  const modelVersion = 'gemini-2.5-flash'; 
+  const modelVersion = 'gemini-2.5-pro'; 
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelVersion}:generateContent?key=${CONFIG.API_KEY}`;
 
   let promptText = "";
