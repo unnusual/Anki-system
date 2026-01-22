@@ -66,14 +66,14 @@ function processFormSubmission(e) {
     return;
   }
 
-  // 2. CEREBRO (Gemini)
+  // === 2. CEREBRO (Gemini) ===
   let enriched;
   try {
     enriched = callGeminiAnalyst(wordData);
     console.log("✅ Gemini: Datos listos.");
   } catch (err) { console.error("❌ ERROR GEMINI:", err); return; }
 
-  // 3. AUDIO (OpenAI)
+  // === 3. AUDIO (OpenAI) ===
   try {
     // Generamos nombre limpio sin corchetes
     const wordFilename = `word_${cleanFilename(wordData.palabra)}.mp3`;
@@ -91,7 +91,7 @@ function processFormSubmission(e) {
     enriched.audioWord = ""; enriched.audioSentence = "";
   }
 
-  // 4. IMAGEN (DESACTIVADA TEMPORALMENTE)
+  // === 4. IMAGEN (DESACTIVADA TEMPORALMENTE) ===
   /* BLOQUE COMENTADO PARA EVITAR ERRORES DE BÚSQUEDA
      Si quieres reactivarlo, descomenta este bloque.
   try {
@@ -113,14 +113,14 @@ function processFormSubmission(e) {
   console.log("🚫 Paso de Imagen: OMITIDO (Configuración temporal).");
 
 
-  // 5. GUARDAR
+  // === 5. GUARDAR ===
   try {
     addToAnkiSheet(enriched);
     console.log("🎉 ÉXITO TOTAL: Tarjeta guardada (Texto + Audio).");
   } catch (err) { console.error("❌ Error Sheets:", err); }
 }
 
-// === 3. GEMINI ANALYST ===
+// === 6. GEMINI ANALYST ===
 function callGeminiAnalyst(wordData) {
   const modelVersion = 'gemini-2.5-pro'; 
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelVersion}:generateContent?key=${CONFIG.API_KEY}`;
@@ -191,7 +191,7 @@ function callGeminiAnalyst(wordData) {
   };
 }
 
-// === 4. GOOGLE CUSTOM SEARCH (NO SE LLAMA) ===
+// === 7. GOOGLE CUSTOM SEARCH (NO SE LLAMA)===
 function callGoogleImageSearch(query, filename) {
   // Función mantenida pero no invocada
   if (!CONFIG.SEARCH_ENGINE_ID) return "";
@@ -213,7 +213,7 @@ function callGoogleImageSearch(query, filename) {
   }
 }
 
-// === 5. OPENAI TTS ===
+// === 5.1 OPENAI TTS ===
 function callOpenAITTS(text, filename) {
   if (!text) return "";
   const url = "https://api.openai.com/v1/audio/speech";
