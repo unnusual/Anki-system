@@ -17,7 +17,7 @@ const CONFIG = {
 function initializeSystem() {
   ensureAnkiSheet();
   setupTrigger();
-  console.log('🚀 Sistema V4.0 Google Images: Búsqueda Real + Etiquetas Estrictas.');
+  console.log('🚀 Sistema V4.0 (Modo Seguro): Imágenes DESACTIVADAS.');
 }
 
 function setupTrigger() {
@@ -27,6 +27,7 @@ function setupTrigger() {
 }
 
 // === HELPER: ROBUST SAVE  ===
+// NOTA: Requiere activar el servicio "Drive API" en la configuración del editor
 function saveFileToDrive(blob, filename, folderId) {
   try {
     const fileMetadata = {
@@ -44,7 +45,7 @@ function saveFileToDrive(blob, filename, folderId) {
 
 // === 2. MAIN PROCESSOR ===
 function processFormSubmission(e) {
-  console.log("🏁 INICIANDO PROCESO V4.0...");
+  console.log("🏁 INICIANDO PROCESO V4.0 (Sin Imágenes)...");
   
   // 1. Extracción
   let wordData;
@@ -90,8 +91,9 @@ function processFormSubmission(e) {
     enriched.audioWord = ""; enriched.audioSentence = "";
   }
 
-  // 4. IMAGEN (Google Custom Search)
-  // Buscamos una imagen real en internet
+  // 4. IMAGEN (DESACTIVADA TEMPORALMENTE)
+  /* BLOQUE COMENTADO PARA EVITAR ERRORES DE BÚSQUEDA
+     Si quieres reactivarlo, descomenta este bloque.
   try {
     if (wordData.modo !== 'Solo Pronunciación' && enriched.image_query) {
       console.log(`🔎 Buscando imagen: "${enriched.image_query}"...`);
@@ -104,15 +106,21 @@ function processFormSubmission(e) {
     console.error("⚠️ Error Imagen:", err.toString());
     enriched.image = ""; 
   }
+  */
+  
+  // Forzamos que la imagen sea vacía para que no rompa el array
+  enriched.image = ""; 
+  console.log("🚫 Paso de Imagen: OMITIDO (Configuración temporal).");
+
 
   // 5. GUARDAR
   try {
     addToAnkiSheet(enriched);
-    console.log("🎉 ÉXITO TOTAL: Tarjeta guardada.");
+    console.log("🎉 ÉXITO TOTAL: Tarjeta guardada (Texto + Audio).");
   } catch (err) { console.error("❌ Error Sheets:", err); }
 }
 
-// === 3. GEMINI ANALYST (MODIFICADO PARA BÚSQUEDA) ===
+// === 3. GEMINI ANALYST ===
 function callGeminiAnalyst(wordData) {
   const modelVersion = 'gemini-2.5-flash'; 
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelVersion}:generateContent?key=${CONFIG.API_KEY}`;
@@ -133,28 +141,33 @@ function callGeminiAnalyst(wordData) {
     `;
   } else {
     promptText = `
-      You are a linguistic engine. Analyze: "${wordData.palabra}". Context: "${wordData.contexto}".
-      Task: Create Anki card. Output JSON.
+      You are an expert IELTS vocabulary tutor.
       
-      CRITICAL FOR IMAGE_QUERY:
-      - Instead of describing an image, provide the BEST GOOGLE SEARCH QUERY to find a visual representation.
-      - Prefer "vector", "icon", or "illustration" keywords in the query to get clean images.
-      - Example: If word is "Run", query should be "person running flat vector icon".
+      INPUT DATA:
+      - Word/Phrase: "${wordData.palabra}"
+      - User's Context (Source): "${wordData.contexto}"
+
+      TASK: Create content for an Anki flashcard.
+      
+      INSTRUCTIONS FOR "EXAMPLE":
+      1. Analyze the User's Context to understand the specific nuance/meaning intended.
+      2. GENERATE A NEW, POLISHED SENTENCE for the "example" field.
+      3. The "example" must be clear, grammatically perfect, and use the word naturally.
       
       JSON Schema:
       {
-        "definition": "Concise definition (max 15 words).",
-        "example": "Sentence with Anki cloze: 'The {{c1::word}} ...'",
-        "example_raw": "Same sentence plain text for Audio TTS.",
+        "definition": "Concise definition (max 15 words) matching the specific context.",
+        "example": "A NEW, clear sentence using the word with Anki cloze: 'The {{c1::word}} ...'",
+        "example_raw": "The same sentence above but plain text (no cloze) for Audio TTS.",
         "type": "Part of speech.",
-        "image_query": "Optimized Google Images search query (e.g. 'word vector icon')"
+        "image_query": "Optimized Google Images search query" 
       }
     `;
   }
 
   const payload = {
     contents: [{ parts: [{ text: promptText }] }],
-    generationConfig: { responseMimeType: "application/json", temperature: 0.1 }
+    generationConfig: { responseMimeType: "application/json", temperature: 0.3 }
   };
 
   const options = {
@@ -169,67 +182,38 @@ function callGeminiAnalyst(wordData) {
   return {
     ...wordData, 
     definicion: result.definition,
-    ejemplo: result.example,     
+    ejemplo: result.example, 
     ejemplo_raw: result.example_raw, 
     tipo: result.type,
     tags: null,
-    image_query: result.image_query, // Ahora es una query de búsqueda, no un prompt
+    image_query: result.image_query,
     tag_mode: wordData.modo === 'Solo Pronunciación' ? 'pronunciation' : 'general_vocab'
   };
 }
 
-// === 4. GOOGLE CUSTOM SEARCH (NUEVO) ===
+// === 4. GOOGLE CUSTOM SEARCH (NO SE LLAMA) ===
 function callGoogleImageSearch(query, filename) {
-  if (!CONFIG.SEARCH_ENGINE_ID) {
-    console.warn("⚠️ No Search Engine ID configured.");
-    return "";
-  }
-
-  // Construimos la URL de la API
-  // searchType=image: Solo busca imágenes
-  // num=1: Solo queremos 1 resultado
-  // fileType=jpg|png: Preferimos formatos estándar
-  // safe=active: Filtro SafeSearch activado
+  // Función mantenida pero no invocada
+  if (!CONFIG.SEARCH_ENGINE_ID) return "";
   const apiUrl = `https://www.googleapis.com/customsearch/v1?key=${CONFIG.API_KEY}&cx=${CONFIG.SEARCH_ENGINE_ID}&q=${encodeURIComponent(query)}&searchType=image&num=1&safe=active&fileType=jpg,png`;
 
   try {
     const response = UrlFetchApp.fetch(apiUrl, {muteHttpExceptions: true});
-    if (response.getResponseCode() !== 200) {
-      console.warn("⚠️ Error en búsqueda Google:", response.getContentText());
-      return "";
-    }
-
+    if (response.getResponseCode() !== 200) return "";
     const json = JSON.parse(response.getContentText());
-    
-    // Verificamos si hay resultados
-    if (!json.items || json.items.length === 0) {
-      console.warn("⚠️ No se encontraron imágenes para:", query);
-      return "";
-    }
-
-    // Tomamos la URL de la primera imagen
+    if (!json.items || json.items.length === 0) return "";
     const imageUrl = json.items[0].link;
-    console.log(`🖼️ Imagen encontrada: ${imageUrl}`);
-
-    // Descargamos la imagen
     const imageResponse = UrlFetchApp.fetch(imageUrl, {muteHttpExceptions: true});
-    if (imageResponse.getResponseCode() !== 200) {
-      console.warn("⚠️ No se pudo descargar la imagen remota.");
-      return "";
-    }
-
-    // Guardamos en Drive
+    if (imageResponse.getResponseCode() !== 200) return "";
     const blob = imageResponse.getBlob().setName(filename);
     saveFileToDrive(blob, filename, CONFIG.IMAGE_FOLDER_ID);
     return filename;
-
   } catch (e) {
-    console.error("Excepción en Búsqueda de Imagen:", e.toString());
     return "";
   }
 }
 
-// === 5. OPENAI TTS (Sin cambios) ===
+// === 5. OPENAI TTS ===
 function callOpenAITTS(text, filename) {
   if (!text) return "";
   const url = "https://api.openai.com/v1/audio/speech";
@@ -293,13 +277,12 @@ function addToAnkiSheet(data) {
     data.tipo,
     'NO',
     finalTag,
-    data.audioWord,     // Guardamos SOLO el nombre del archivo
-    data.image,         // Guardamos SOLO el nombre del archivo
-    data.audioSentence  // Guardamos SOLO el nombre del archivo
+    data.audioWord, 
+    data.image,  // Esto llegará vacío
+    data.audioSentence 
   ]);
 }
 
-// ✅ EXPORTACIÓN (V3.7 Restaurada - Agrega corchetes AQUÍ)
 function onOpen() {
   SpreadsheetApp.getUi().createMenu('🗂️ Anki Tools')
     .addItem('Prepare New Words for Export', 'prepareAnkiExport')
@@ -330,23 +313,13 @@ function prepareAnkiExport() {
   exportSheet.getRange(1, 1, 1, exportHeaders.length).setValues([exportHeaders]).setFontWeight('bold');
   
   const rowsToExport = newWords.map(r => {
-    // 🛑 AQUÍ SE AGREGAN LOS CORCHETES [sound:...]
-    // Como en la hoja 'Anki' solo guardamos el nombre limpio, esto funcionará perfecto.
     const audioWordTag = r[9] ? `[sound:${r[9]}]` : "";
     const imageTag = r[10] ? `<img src="${r[10]}">` : "";
     const audioSentTag = r[11] ? `[sound:${r[11]}]` : "";
 
     return [
-      r[0], // ID
-      r[2], // Word
-      r[3], // Definition
-      r[4], // Example
-      r[5], // Context
-      r[6], // Type
-      r[8], // Tags
-      audioWordTag,
-      imageTag,
-      audioSentTag
+      r[0], r[2], r[3], r[4], r[5], r[6], r[8],
+      audioWordTag, imageTag, audioSentTag
     ];
   });
   
@@ -360,17 +333,4 @@ function prepareAnkiExport() {
 
   exportSheet.activate();
   SpreadsheetApp.getUi().alert(`✅ Export listo.`);
-}
-
-function testManualSubmission() {
-  const mockEvent = {
-    namedValues: {
-      'Palabra o frase que quieres aprender': ['laptop'], 
-      'Contexto u oración donde la viste (opcional)': [''],
-      'Tipo de palabra (opcional)': [''],
-      'Modo de Estudio': ['Vocabulario General'] 
-    }
-  };
-  console.log("🧪 Iniciando prueba V4.0 (Google Images)...");
-  processFormSubmission(mockEvent);
 }
