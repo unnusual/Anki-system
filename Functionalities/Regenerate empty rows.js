@@ -1,3 +1,13 @@
+/*
+function onOpen() {
+  SpreadsheetApp.getUi().createMenu('🗂️ Anki Tools')
+    .addItem('Prepare New Words for Export', 'prepareAnkiExport')
+    .addSeparator()
+    .addItem('🚑 Regenerar Filas Vacías', 'regenerateEmptyRows')
+    .addToUi();
+}
+*/
+
 // === 🚑 CIRUGÍA: REGENERAR FILAS VACÍAS ===
 
 function regenerateEmptyRows() {
