@@ -120,7 +120,7 @@ function processFormSubmission(e) {
   } catch (err) { console.error("❌ Error Sheets:", err); }
 }
 
-// === 6. GEMINI ANALYST ===
+// === 6. GEMINI ANALYST (V4.5: FIX PRONUNCIACIÓN + CLOZE) ===
 function callGeminiAnalyst(wordData) {
   const modelVersion = 'gemini-2.5-pro'; 
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelVersion}:generateContent?key=${CONFIG.API_KEY}`;
@@ -128,46 +128,48 @@ function callGeminiAnalyst(wordData) {
   let promptText = "";
   
   if (wordData.modo === 'Solo Pronunciación') {
+    // 🎤 MODO PRONUNCIACIÓN: FORZAMOS CLOZE
     promptText = `
       You are a linguistic engine. Analyze: "${wordData.palabra}". Context: "${wordData.contexto}".
-      Task: Pronunciation data. Output JSON.
+      
+      TASK: Create Pronunciation data for an Anki Cloze card.
+      CRITICAL: You MUST use the cloze format {{c1::word}} in the 'example' field.
+      
+      JSON Schema:
       {
-        "definition": "IPA transcription",
-        "example": "Tip about stress/linking",
-        "example_raw": null,
+        "definition": "IPA transcription (e.g. /wɜːrd/).",
+        "example": "Pronunciation tip for {{c1::${wordData.palabra}}}: [Insert tip regarding stress/linking]",
+        "example_raw": "Pronunciation tip for ${wordData.palabra}: [Insert tip regarding stress/linking]",
         "type": "Part of speech",
         "image_query": null
       }
     `;
   } else {
+    // 📚 MODO VOCABULARIO GENERAL
     promptText = `
       You are an expert IELTS vocabulary tutor.
+      INPUT: Word: "${wordData.palabra}", Context: "${wordData.contexto}".
       
-      INPUT DATA:
-      - Word/Phrase: "${wordData.palabra}"
-      - User's Context (Source): "${wordData.contexto}"
-
-      TASK: Create content for an Anki flashcard.
-      
-      INSTRUCTIONS FOR "EXAMPLE":
-      1. Analyze the User's Context to understand the specific nuance/meaning intended.
-      2. GENERATE A NEW, POLISHED SENTENCE for the "example" field.
-      3. The "example" must be clear, grammatically perfect, and use the word naturally.
+      TASK: Create Anki card JSON.
+      RULES:
+      1. Use Context to understand meaning.
+      2. GENERATE A NEW "example" sentence.
+      3. The "example" must be clear and use the word naturally.
       
       JSON Schema:
       {
-        "definition": "Concise definition (max 15 words) matching the specific context.",
-        "example": "A NEW, clear sentence using the word with Anki cloze: 'The {{c1::word}} ...'",
-        "example_raw": "The same sentence above but plain text (no cloze) for Audio TTS.",
+        "definition": "Concise definition (max 15 words).",
+        "example": "New sentence with Anki cloze: 'The {{c1::word}} ...'",
+        "example_raw": "New sentence plain text.",
         "type": "Part of speech.",
-        "image_query": "Optimized Google Images search query" 
+        "image_query": "Optimized Google Images search query"
       }
     `;
   }
 
   const payload = {
     contents: [{ parts: [{ text: promptText }] }],
-    generationConfig: { responseMimeType: "application/json", temperature: 0.3 }
+    generationConfig: { responseMimeType: "application/json", temperature: 0.2 }
   };
 
   const options = {
@@ -175,42 +177,41 @@ function callGeminiAnalyst(wordData) {
   };
 
   const response = UrlFetchApp.fetch(url, options);
-  if (response.getResponseCode() !== 200) throw new Error(response.getContentText());
+  if (response.getResponseCode() !== 200) throw new Error("Gemini API Error: " + response.getContentText());
 
-  const result = JSON.parse(JSON.parse(response.getContentText()).candidates[0].content.parts[0].text);
+  let rawText = JSON.parse(response.getContentText()).candidates[0].content.parts[0].text;
+  rawText = rawText.replace(/```json/g, "").replace(/```/g, "").trim();
+  const result = JSON.parse(rawText);
+
+  // 🛡️ AUTO-CORRECCIÓN DE CLOZE (UNIVERSAL)
+  // Verifica si Gemini olvidó el {{c1::}} y lo arregla automáticamente
+  let finalExample = result.example;
+  
+  if (finalExample && !finalExample.includes('{{c1::')) {
+      console.warn(`⚠️ Gemini olvidó el Cloze para "${wordData.palabra}". Aplicando parche...`);
+      
+      const escapedWord = wordData.palabra.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const regex = new RegExp(`(${escapedWord})`, 'gi');
+      
+      if (regex.test(finalExample)) {
+          // Si la palabra está en la frase, la envolvemos
+          finalExample = finalExample.replace(regex, '{{c1::$1}}');
+      } else {
+          // Si no está, forzamos el formato al inicio para que Anki no falle
+          finalExample = `Note on {{c1::${wordData.palabra}}}: ${finalExample}`;
+      }
+  }
 
   return {
     ...wordData, 
     definicion: result.definition,
-    ejemplo: result.example, 
+    ejemplo: finalExample, 
     ejemplo_raw: result.example_raw, 
     tipo: result.type,
     tags: null,
     image_query: result.image_query,
     tag_mode: wordData.modo === 'Solo Pronunciación' ? 'pronunciation' : 'general_vocab'
   };
-}
-
-// === 7. GOOGLE CUSTOM SEARCH (NO SE LLAMA)===
-function callGoogleImageSearch(query, filename) {
-  // Función mantenida pero no invocada
-  if (!CONFIG.SEARCH_ENGINE_ID) return "";
-  const apiUrl = `https://www.googleapis.com/customsearch/v1?key=${CONFIG.API_KEY}&cx=${CONFIG.SEARCH_ENGINE_ID}&q=${encodeURIComponent(query)}&searchType=image&num=1&safe=active&fileType=jpg,png`;
-
-  try {
-    const response = UrlFetchApp.fetch(apiUrl, {muteHttpExceptions: true});
-    if (response.getResponseCode() !== 200) return "";
-    const json = JSON.parse(response.getContentText());
-    if (!json.items || json.items.length === 0) return "";
-    const imageUrl = json.items[0].link;
-    const imageResponse = UrlFetchApp.fetch(imageUrl, {muteHttpExceptions: true});
-    if (imageResponse.getResponseCode() !== 200) return "";
-    const blob = imageResponse.getBlob().setName(filename);
-    saveFileToDrive(blob, filename, CONFIG.IMAGE_FOLDER_ID);
-    return filename;
-  } catch (e) {
-    return "";
-  }
 }
 
 // === 5.1 OPENAI TTS ===
