@@ -8,8 +8,7 @@ function onOpen() {
 }
 */
 
-// === 🛠️ HERRAMIENTA: RELLENAR AUDIOS FALTANTES ===
-
+// === 🛠️ HERRAMIENTA: RELLENAR AUDIOS FALTANTES (VERSION CHIRP 3 HD) ===
 function generateMissingAudios() {
   const ui = SpreadsheetApp.getUi();
   const ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -17,82 +16,86 @@ function generateMissingAudios() {
   
   if (!sheet) { ui.alert("No se encontró la hoja 'Anki'"); return; }
 
-  // Indices de columnas (Basado en A=0, B=1...)
-  // C=2 (Word), E=4 (Example), J=9 (Audio Word), L=11 (Audio Sentence)
-  const WORD_IDX = 2;
-  const EXAMPLE_IDX = 4;
-  const AUDIO_WORD_IDX = 9;
-  const AUDIO_SENT_IDX = 11;
+  // Ajusta estos índices según tu realidad (A=0, B=1, etc.)
+  const WORD_IDX = 2;       // Columna C
+  const EXAMPLE_IDX = 4;    // Columna E
+  const AUDIO_WORD_IDX = 9; // Columna J
+  const AUDIO_SENT_IDX = 11;// Columna L
 
-  const dataRange = sheet.getDataRange();
-  const data = dataRange.getValues();
-  
+  const data = sheet.getDataRange().getValues();
   let generatedCount = 0;
   
-  // Notificación inicial
-  ss.toast("Analizando filas en busca de audios faltantes...", "Iniciando", 5);
+  // LÍMITE DE SEGURIDAD: Procesar máximo 15 filas por ejecución para evitar Timeouts de 6 min
+  const MAX_ROWS_PER_RUN = 15;
+  let rowsProcessedInThisRun = 0;
 
-  // Empezamos en i=1 para saltar el encabezado
-  for (let i = 1; i < data.length; i++) {
+  ss.toast("Analizando audios con Kore y Leda...", "Iniciando", 5);
+
+  for (let i = 1; i < data.length && rowsProcessedInThisRun < MAX_ROWS_PER_RUN; i++) {
     const word = data[i][WORD_IDX];
-    
-    // Si no hay palabra, saltamos la fila
     if (!word) continue;
 
     const rowNumber = i + 1;
     let rowUpdated = false;
 
-    // 1. VERIFICAR AUDIO DE PALABRA
+    // 1. VERIFICAR AUDIO DE PALABRA (Usando Kore)
     if (data[i][AUDIO_WORD_IDX] === "") {
       try {
-        console.log(`🎤 Generando Audio Palabra para: "${word}"...`);
+        console.log(`🎤 Kore generando palabra: "${word}"...`);
         const filename = `word_${cleanFilename(word)}.mp3`;
-        // Llamamos a tu función existente
-        const result = callOpenAITTS(word, filename);
+        
+        // PASO IMPORTANTE: Enviamos "word" como tercer parámetro
+        const result = callGoogleTTS(word, filename, "word");
         
         if (result) {
           sheet.getRange(rowNumber, AUDIO_WORD_IDX + 1).setValue(result);
           generatedCount++;
           rowUpdated = true;
         }
+        Utilities.sleep(1500); // Pausa para no saturar la API
       } catch (e) {
         console.error(`Error palabra fila ${rowNumber}: ${e.message}`);
       }
     }
 
-    // 2. VERIFICAR AUDIO DE FRASE
+    // 2. VERIFICAR AUDIO DE FRASE (Usando Leda)
     if (data[i][AUDIO_SENT_IDX] === "") {
       const rawExample = data[i][EXAMPLE_IDX];
       
-      // Solo generamos si hay un ejemplo escrito
       if (rawExample && rawExample.toString().trim() !== "") {
         try {
-          // Limpiamos el formato Cloze {{c1::word}} -> word
           const cleanText = rawExample.toString().replace(/\{\{c\d+::(.*?)\}\}/g, '$1');
           
-          console.log(`🗣️ Generando Audio Frase para fila ${rowNumber}...`);
+          console.log(`🗣️ Leda generando frase para: "${word}"...`);
           const filename = `sent_${cleanFilename(word)}.mp3`;
           
-          // Llamamos a tu función existente
-          const result = callOpenAITTS(cleanText, filename);
+          // PASO IMPORTANTE: Enviamos "sentence" como tercer parámetro
+          const result = callGoogleTTS(cleanText, filename, "sentence");
           
           if (result) {
             sheet.getRange(rowNumber, AUDIO_SENT_IDX + 1).setValue(result);
             generatedCount++;
             rowUpdated = true;
           }
+          Utilities.sleep(1500); // Pausa para no saturar la API
         } catch (e) {
           console.error(`Error frase fila ${rowNumber}: ${e.message}`);
         }
       }
     }
 
-    // Forzamos guardar cambios en el Sheet cada 5 actualizaciones para no perder datos si falla
-    if (rowUpdated && generatedCount % 5 === 0) {
-      SpreadsheetApp.flush();
-      ss.toast(`Generados ${generatedCount} audios hasta ahora...`, "Progreso");
+    if (rowUpdated) {
+      rowsProcessedInThisRun++;
+      if (generatedCount % 3 === 0) {
+        SpreadsheetApp.flush();
+        ss.toast(`Generados ${generatedCount} audios...`, "Progreso");
+      }
     }
   }
 
-  ui.alert('✅ Proceso Finalizado', `Se generaron ${generatedCount} audios nuevos que faltaban.`, ui.ButtonSet.OK);
+  const msg = (rowsProcessedInThisRun >= MAX_ROWS_PER_RUN) 
+    ? `Límite de lote alcanzado (${MAX_ROWS_PER_RUN} filas). Se generaron ${generatedCount} audios. Ejecuta de nuevo para continuar.`
+    : `Proceso finalizado. Se generaron ${generatedCount} audios nuevos.`;
+
+  ui.alert('✅ Resultado del Lote', msg, ui.ButtonSet.OK);
 }
