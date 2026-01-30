@@ -72,17 +72,17 @@ function processFormSubmission(e) {
     console.log("✅ Gemini: Datos listos.");
   } catch (err) { console.error("❌ ERROR GEMINI:", err); return; }
 
-  // === 3. AUDIO (OpenAI TTS) ===
+  // === 3. AUDIO (Google Cloud TTS) ===
   try {
     const wordFilename = `word_${cleanFilename(wordData.palabra)}.mp3`;
-    enriched.audioWord = callOpenAITTS(wordData.palabra, wordFilename);
+    enriched.audioWord = callGoogleTTS(wordData.palabra, wordFilename); // CAMBIO AQUÍ
     
     if (enriched.ejemplo_raw && wordData.modo !== 'Solo Pronunciación') {
-       console.log("🔹 Generando audio frase...");
-       const sentenceFilename = `sent_${cleanFilename(wordData.palabra)}.mp3`;
-       enriched.audioSentence = callOpenAITTS(enriched.ejemplo_raw, sentenceFilename);
+      console.log("🔹 Generando audio frase con Google...");
+      const sentenceFilename = `sent_${cleanFilename(wordData.palabra)}.mp3`;
+      enriched.audioSentence = callGoogleTTS(enriched.ejemplo_raw, sentenceFilename); // CAMBIO AQUÍ
     } else {
-       enriched.audioSentence = "";
+      enriched.audioSentence = "";
     }
   } catch (err) {
     console.error("⚠️ Error Audio:", err);
@@ -233,19 +233,66 @@ function callOpenAIDalle(prompt, filename) {
   return filename;
 }
 
-// === 8. TTS & UTILS (SIN CAMBIOS) ===
-function callOpenAITTS(text, filename) {
+// === 8. TTS & UTILS (Google TTS) ===
+function callGoogleTTS(text, filename, type) {
   if (!text) return "";
-  const url = "https://api.openai.com/v1/audio/speech";
-  const payload = { model: "tts-1", input: text, voice: "nova" };
-  const response = UrlFetchApp.fetch(url, {
-    method: "post", headers: { "Authorization": "Bearer " + CONFIG.OPENAI_API_KEY },
-    contentType: "application/json", payload: JSON.stringify(payload)
-  });
-  const blob = response.getBlob().setName(filename);
-  saveFileToDrive(blob, filename, CONFIG.AUDIO_FOLDER_ID);
-  return filename;
+  
+  const url = `https://texttospeech.googleapis.com/v1/text:synthesize?key=${CONFIG.API_KEY}`;
+  
+  // Selección de Modelo y Voz
+  let voiceName;
+  let useHDParams = false;
+
+  if (type === "word") {
+    // Usamos Neural2 para máxima precisión en la sílaba tónica
+    voiceName = "en-US-Studio-O"; 
+    useHDParams = false;
+  } else {
+    // Usamos Chirp3 HD para máxima naturalidad en la frase
+    voiceName = "en-US-Chirp3-HD-Leda";
+    useHDParams = true;
+  }
+
+  const payload = {
+    input: { text: text },
+    voice: { 
+      languageCode: "en-US", 
+      name: voiceName 
+    },
+    audioConfig: { 
+      audioEncoding: "MP3",
+      // Estos parámetros solo se aplican si NO es un modelo Chirp/HD
+      speakingRate: useHDParams ? 1.0 : 0.95, 
+      pitch: 0.0,
+      volumeGainDb: 1.
+    }
+  };
+
+  const options = {
+    method: "post",
+    contentType: "application/json",
+    payload: JSON.stringify(payload),
+    muteHttpExceptions: true
+  };
+
+  try {
+    const response = UrlFetchApp.fetch(url, options);
+    const json = JSON.parse(response.getContentText());
+
+    if (response.getResponseCode() !== 200) {
+      console.error(`❌ Error API (${voiceName}): ${json.error ? json.error.message : "Desconocido"}`);
+      return "";
+    }
+
+    const audioBlob = Utilities.newBlob(Utilities.base64Decode(json.audioContent), "audio/mp3", filename);
+    saveFileToDrive(audioBlob, filename, CONFIG.AUDIO_FOLDER_ID);
+    return filename;
+  } catch (e) {
+    console.error(`⚠️ Excepción en TTS: ${e.message}`);
+    return "";
+  }
 }
+
 // === UTILS, SHEETS & EXPORT ===
 function cleanFilename(text) {
   return text.replace(/[^a-z0-9]/gi, '_').toLowerCase().substring(0, 15) + "_" + Utilities.getUuid().substring(0,4);
