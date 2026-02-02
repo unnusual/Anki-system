@@ -75,12 +75,16 @@ function processFormSubmission(e) {
   // === 3. AUDIO (Google Cloud TTS) ===
   try {
     const wordFilename = `word_${cleanFilename(wordData.palabra)}.mp3`;
-    enriched.audioWord = callGoogleTTS(wordData.palabra, wordFilename); // CAMBIO AQUÍ
+    
+    // PASAMOS EL IPA COMO 4to ARGUMENTO
+    // Si Gemini no generó IPA, pasamos null para que use la pronunciación default
+    enriched.audioWord = callGoogleTTS(wordData.palabra, wordFilename, "word", enriched.ipa); 
     
     if (enriched.ejemplo_raw && wordData.modo !== 'Solo Pronunciación') {
       console.log("🔹 Generando audio frase con Google...");
       const sentenceFilename = `sent_${cleanFilename(wordData.palabra)}.mp3`;
-      enriched.audioSentence = callGoogleTTS(enriched.ejemplo_raw, sentenceFilename); // CAMBIO AQUÍ
+      // Las frases no llevan IPA forzado, sería muy complejo
+      enriched.audioSentence = callGoogleTTS(enriched.ejemplo_raw, sentenceFilename, "sentence"); 
     } else {
       enriched.audioSentence = "";
     }
@@ -128,6 +132,7 @@ function callGeminiAnalyst(wordData) {
       JSON Schema:
       {
         "definition": "IPA transcription (e.g. /wɜːrd/).",
+        "ipa": "ˌaɪ.dəmˈpoʊ.tənt",
         "example": "Pronunciation tip for {{c1::${wordData.palabra}}}: [Insert tip regarding stress/linking]",
         "example_raw": "Pronunciation tip for ${wordData.palabra}: [Insert tip regarding stress/linking]",
         "type": "Part of speech",
@@ -147,6 +152,7 @@ function callGeminiAnalyst(wordData) {
       JSON Schema:
       {
         "definition": "Concise definition (max 15 words).",
+        "ipa": "ˌaɪ.dəmˈpoʊ.tənt",
         "example": "New sentence with Anki cloze: 'The {{c1::word}} ...'",
         "example_raw": "New sentence plain text.",
         "type": "Part of speech.",
@@ -189,6 +195,7 @@ function callGeminiAnalyst(wordData) {
   return {
     ...wordData, 
     definicion: result.definition,
+    ipa: result.ipa,
     ejemplo: finalExample, 
     ejemplo_raw: result.example_raw, 
     tipo: result.type,
@@ -234,37 +241,60 @@ function callOpenAIDalle(prompt, filename) {
 }
 
 // === 8. TTS & UTILS (Google TTS) ===
-function callGoogleTTS(text, filename, type) {
+function callGoogleTTS(text, filename, type, ipa = null) {
   if (!text) return "";
   
   const url = `https://texttospeech.googleapis.com/v1/text:synthesize?key=${CONFIG.API_KEY}`;
   
-  // Selección de Modelo y Voz
+  // Configuración de Voz
   let voiceName;
-  let useHDParams = false;
+  let useSSML = false;
+  let inputPayload = {};
 
   if (type === "word") {
-    // Usamos Neural2 para máxima precisión en la sílaba tónica
-    voiceName = "en-US-Studio-O"; 
-    useHDParams = false;
+    voiceName = "en-US-Studio-O"; // Studio soporta SSML perfectamente
+    
+    // LOGICA DE INYECCIÓN DE PRONUNCIACIÓN
+    if (ipa) {
+      // Limpiamos el IPA de barras si Gemini las puso (ej: /word/ -> word)
+      const cleanIPA = ipa.replace(/\//g, '').trim();
+      
+      // Construimos el SSML
+      // <phoneme> fuerza al modelo a leer los símbolos fonéticos
+      const ssmlText = `<speak><phoneme alphabet="ipa" ph="${cleanIPA}">${text}</phoneme></speak>`;
+      
+      inputPayload = { ssml: ssmlText };
+      useSSML = true;
+      console.log(`🔤 Usando IPA forzado para ${text}: [${cleanIPA}]`);
+    } else {
+      // Fallback a texto plano con corrección manual si no hay IPA
+      let processedText = text.toLowerCase();
+      // Pequeño diccionario de emergencia por si Gemini falla
+      if (processedText === 'idempotent') processedText = 'eye-dem-po-tent'; 
+      inputPayload = { text: processedText };
+    }
+
   } else {
-    // Usamos Chirp3 HD para máxima naturalidad en la frase
+    // Para oraciones usamos Chirp (Leda) que prefiere texto plano
     voiceName = "en-US-Chirp3-HD-Leda";
-    useHDParams = true;
+    // Aseguramos punto final para buena prosodia
+    let processedSent = text.trim();
+    if (!processedSent.endsWith('.')) processedSent += '.';
+    inputPayload = { text: processedSent };
   }
 
   const payload = {
-    input: { text: text },
+    input: inputPayload,
     voice: { 
       languageCode: "en-US", 
       name: voiceName 
     },
     audioConfig: { 
       audioEncoding: "MP3",
-      // Estos parámetros solo se aplican si NO es un modelo Chirp/HD
-      speakingRate: useHDParams ? 1.0 : 0.95, 
+      // Studio (word) acepta ajustes, Chirp (sentence) los ignora
+      speakingRate: (type === "word") ? 1.0 : 1.0, 
       pitch: 0.0,
-      volumeGainDb: 1.
+      volumeGainDb: 1.0
     }
   };
 
@@ -281,6 +311,11 @@ function callGoogleTTS(text, filename, type) {
 
     if (response.getResponseCode() !== 200) {
       console.error(`❌ Error API (${voiceName}): ${json.error ? json.error.message : "Desconocido"}`);
+      // Fallback: Si falla el SSML (IPA inválido), reintentamos con texto plano
+      if (useSSML) {
+        console.warn("🔄 Reintentando sin SSML...");
+        return callGoogleTTS(text, filename, type, null);
+      }
       return "";
     }
 
