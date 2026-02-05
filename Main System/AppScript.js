@@ -1,6 +1,6 @@
 // === CONFIGURATION ===
 const CONFIG = {
-   // Usa la misma Key de GCP si tiene permisos, o crea una nueva para Custom Search
+   // Gemini API to generate content
   API_KEY: PropertiesService.getScriptProperties().getProperty('GEMINI_API_KEY'), 
 
   //OpenAI models API to generate audio
@@ -17,7 +17,7 @@ const CONFIG = {
 function initializeSystem() {
   ensureAnkiSheet();
   setupTrigger();
-  console.log('🚀 Sistema V5.0: Multimodal (Gemini + GPT-4o-mini + DALL-E 3).');
+  console.log('🚀 V5.0 System: Multimodal (Gemini + GPT-4o-mini + DALL-E 3).');
 }
 
 function setupTrigger() {
@@ -37,53 +37,73 @@ function saveFileToDrive(blob, filename, folderId) {
     Drive.Files.insert(fileMetadata, blob);
     return true; 
   } catch (e) {
-    console.error(`❌ Error guardando archivo ${filename}: ${e.message}`);
+    console.error(`❌ Error saving archive ${filename}: ${e.message}`);
     throw e;
   }
 }
 
 // === 2. MAIN PROCESSOR ===
 function processFormSubmission(e) {
-  console.log("🏁 INICIANDO PROCESO V5.0...");
+  console.log("🏁 INITIALIZING PROCESS V5.0...");
   
-  //extracción
-  let wordData;
+  // Extraction
+  const wordData = extractFormData(e);
   try {
-    wordData = extractFormData(e);
-    if (!wordData.palabra) { console.warn("⚠️ No se detectó palabra."); return; }
-    console.log(`📌 Procesando: "${wordData.palabra}"`);
+    if (!wordData.palabra) { console.warn("⚠️ Word not found"); return; }
+    console.log(`📌 Processing: "${wordData.palabra}"`);
   } catch (err) { console.error("❌ Error Data:", err); return; }
 
-  // 1.5 Validación de Duplicados
+  // --- 🛡️ SMART DEDUPLICATION LOGIC ---
   const sheet = ensureAnkiSheet();
-  const existingWords = sheet.getRange("C:C").getValues().flat()
-    .filter(cell => cell !== "") 
-    .map(w => w.toString().toLowerCase());
+  const allData = sheet.getDataRange().getValues();
 
-  if (existingWords.includes(wordData.palabra.toLowerCase())) {
-    console.warn(`⏭️ DUPLICADO: "${wordData.palabra}".`);
-    return;
+  const existingRow = allData.find(row => 
+    row[2] && row[2].toString().toLowerCase() === wordData.palabra.toLowerCase()
+  );
+
+  let isPolysemy = false; // Flag for knowing if it's a new meaning
+
+  if (existingRow) {
+    const oldDef = existingRow[3];
+    const oldContext = existingRow[5];
+
+    console.log(`🔍 Duplicate word found. Analyzing context vs existing definition...`);
+    
+    // Gemini judge is called
+    const contextAnalysis = askGeminiIfNewMeaning(wordData, oldDef, oldContext);
+
+    if (!contextAnalysis.is_different) {
+      // CASE 1: It's the same -> Reject
+      const msg = `The word "${wordData.palabra}" already exists with the same meanign: "${oldDef}". Duplicate won't be created.`;
+      console.warn(`⛔ REJECTED: ${msg}`);
+      return; // The process stops here
+    } else {
+      // CASE 2: It's different -> Proceed
+      console.log(`✨ New meaning detected (Reason: ${contextAnalysis.reason}). Proceeding as Polysemy.`);
+      isPolysemy = true;
+    }
   }
 
-  // === 2. CEREBRO (Gemini) ===
+  // === 2. BRAIN (Gemini) ===
   let enriched;
   try {
-    enriched = callGeminiAnalyst(wordData);
-    console.log("✅ Gemini: Datos listos.");
-  } catch (err) { console.error("❌ ERROR GEMINI:", err); return; }
+    enriched = callGeminiAnalyst(wordData, isPolysemy);
+    console.log("✅ Gemini: Data ready.");
+  } catch (err) { console.error("❌ Error Gemini:", err); return; }
 
   // === 3. AUDIO (Google Cloud TTS) ===
   try {
+    const uniqueSuffix = isPolysemy ? "_v2" : ""; //This avoid overwriting the audio in case it already exists
     const wordFilename = `word_${cleanFilename(wordData.palabra)}.mp3`;
     
-    // PASAMOS EL IPA COMO 4to ARGUMENTO
-    // Si Gemini no generó IPA, pasamos null para que use la pronunciación default
+    // IPA is sent as 4th argument 
+    // If Gemini didn't generate the IPA, we send null to use default pronunciation
     enriched.audioWord = callGoogleTTS(wordData.palabra, wordFilename, "word", enriched.ipa); 
     
     if (enriched.ejemplo_raw && wordData.modo !== 'Solo Pronunciación') {
-      console.log("🔹 Generando audio frase con Google...");
+      console.log("🔹 Generating phrase audio with Google tts...");
       const sentenceFilename = `sent_${cleanFilename(wordData.palabra)}.mp3`;
-      // Las frases no llevan IPA forzado, sería muy complejo
+      // Phrases don't carry forced IPA, would be too complex
       enriched.audioSentence = callGoogleTTS(enriched.ejemplo_raw, sentenceFilename, "sentence"); 
     } else {
       enriched.audioSentence = "";
@@ -96,8 +116,8 @@ function processFormSubmission(e) {
   // === 4. IMAGEN (NUEVO FLUJO DALL-E) ===
   try {
     if (wordData.modo !== 'Solo Pronunciación') {
-      console.log(`🎨 Generando prompt visual para: "${wordData.palabra}"...`);
-      // GPT-4o-mini refina el query de Gemini para DALL-E
+      console.log(`🎨 Generating visual prompt for: "${wordData.palabra}"...`);
+      // GPT-4o-mini refines the Gemini query for DALL-E
       const visualPrompt = generateVisualPrompt(enriched);
       const imgFilename = `img_${cleanFilename(wordData.palabra)}.png`;
       enriched.image = callOpenAIDalle(visualPrompt, imgFilename);
@@ -105,25 +125,71 @@ function processFormSubmission(e) {
       enriched.image = "";
     }
   } catch (err) {
-    console.error("⚠️ Error Imagen:", err.toString());
+    console.error("⚠️ Error Image:", err.toString());
     enriched.image = ""; 
   }
 
-  // === 5. GUARDAR ===
+  // === 5. SAVE ===
   try {
     addToAnkiSheet(enriched);
-    console.log("🎉 ÉXITO TOTAL: Tarjeta guardada.");
+    console.log("🎉 COMPLETE SUCCESS: Card saved.");
   } catch (err) { console.error("❌ Error Sheets:", err); }
 }
+// === 2.5 THE JUDGE ===
+function askGeminiIfNewMeaning(newData, oldDef, oldCtx) {
+  const modelVersion = 'gemini-2.5-pro'; 
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelVersion}:generateContent?key=${CONFIG.API_KEY}`;
+  
+  const prompt = `
+    You are a strict linguistic judge avoiding duplicates in a database.
+    
+    EXISTING ENTRY:
+    - Word: "${newData.palabra}"
+    - Definition: "${oldDef}"
+    - Context used: "${oldCtx}"
 
-// === 6. GEMINI ANALYST (V4.5 RESTAURADA) ===
-function callGeminiAnalyst(wordData) {
+    NEW INPUT:
+    - Word: "${newData.palabra}"
+    - New Context: "${newData.contexto}"
+
+    TASK: 
+    Analyze if the New Context implies a SIGNIFICANTLY DIFFERENT meaning (e.g., Phrasal Verb variation, Polysemy, Noun vs Verb) compared to the Existing Definition.
+    
+    OUTPUT JSON ONLY:
+    {
+      "is_different": boolean, 
+      "reason": "Short explanation (e.g. 'Old is literal, New is idiomatic')"
+    }
+  `;
+
+  const payload = {
+    contents: [{ parts: [{ text: prompt }] }],
+    generationConfig: { responseMimeType: "application/json" }
+  };
+
+  try {
+    const response = UrlFetchApp.fetch(url, {
+      method: 'post', contentType: 'application/json', payload: JSON.stringify(payload), muteHttpExceptions: true
+    });
+    const json = JSON.parse(response.getContentText());
+    const content = json.candidates[0].content.parts[0].text;
+    const cleanJson = content.replace(/```json/g, "").replace(/```/g, "").trim();
+    return JSON.parse(cleanJson);
+  } catch (e) {
+    console.error("Judge Error:", e);
+    // If the judge fails, we assume it's different, to prevent a data leakage  due to technical error
+    return { is_different: true, reason: "Error in check" }; 
+  }
+}
+
+// === 6. GEMINI ANALYST  ===
+function callGeminiAnalyst(wordData, isPolysemy = false) {
   const modelVersion = 'gemini-2.5-pro'; 
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelVersion}:generateContent?key=${CONFIG.API_KEY}`;
 
   let promptText = "";
   
-  // 🎤 MODO PRONUNCIACIÓN: FORZAMOS CLOZE
+  // 🎤 Pronunciation Mode:  cloze is forced
   if (wordData.modo === 'Solo Pronunciación') {
     promptText = `
       You are a linguistic engine. Analyze: "${wordData.palabra}". Context: "${wordData.contexto}".
@@ -139,7 +205,7 @@ function callGeminiAnalyst(wordData) {
         "image_query": null
       }
     `;
-    // 📚 MODO VOCABULARIO GENERAL
+    // 📚 General vocab mode
   } else {
     promptText = `
       You are an expert IELTS vocabulary tutor.
@@ -174,14 +240,14 @@ function callGeminiAnalyst(wordData) {
   if (response.getResponseCode() !== 200) throw new Error("Gemini API Error: " + response.getContentText());
 
   let rawText = JSON.parse(response.getContentText()).candidates[0].content.parts[0].text;
-  // Verifica si Gemini olvidó el {{c1::}} y lo arregla automáticamente
+  // Checks if Gemini forgot the "{{c1::}}"  and fixes it automatically
   rawText = rawText.replace(/```json/g, "").replace(/```/g, "").trim();
   const result = JSON.parse(rawText);
 
-  // 🛡️ AUTO-CORRECCIÓN DE CLOZE (UNIVERSAL)
-  // Si la palabra está en la frase, la envolvemos
+  // 🛡️ CLOZE AUTOCORRECTION (UNIVERSAL)
+  // if the word is in the phrase, it's enveloped
   let finalExample = result.example;
-  // Si no está, forzamos el formato al inicio para que Anki no falle
+  // if it's not, we force the format at the beginning so that anki doesn't fail.
   if (finalExample && !finalExample.includes('{{c1::')) {
       const escapedWord = wordData.palabra.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       const regex = new RegExp(`(${escapedWord})`, 'gi');
@@ -192,6 +258,9 @@ function callGeminiAnalyst(wordData) {
       }
   }
 
+  let tags = result.tags || "";
+  if (isPolysemy) tags = tags ? tags + " polysemy" : "polysemy";
+
   return {
     ...wordData, 
     definicion: result.definition,
@@ -199,13 +268,13 @@ function callGeminiAnalyst(wordData) {
     ejemplo: finalExample, 
     ejemplo_raw: result.example_raw, 
     tipo: result.type,
-    tags: null,
+    tags: tags,
     image_query: result.image_query,
     tag_mode: wordData.modo === 'Solo Pronunciación' ? 'pronunciation' : 'general_vocab'
   };
 }
 
-// === 7. NUEVAS FUNCIONES OPENAI (DIRECTOR + DALL-E) ===
+// === 7. OPENAI (DIRECTOR + DALL-E) ===
 
 function generateVisualPrompt(enriched) {
   const url = "https://api.openai.com/v1/chat/completions";
@@ -254,30 +323,30 @@ function callGoogleTTS(text, filename, type, ipa = null) {
   if (type === "word") {
     voiceName = "en-US-Studio-O"; // Studio soporta SSML perfectamente
     
-    // LOGICA DE INYECCIÓN DE PRONUNCIACIÓN
+    // PRONUNCIATION LOGIC INYECTION
     if (ipa) {
-      // Limpiamos el IPA de barras si Gemini las puso (ej: /word/ -> word)
+      // IPA is cleaned from bars (/word/) in case Gemini put them
       const cleanIPA = ipa.replace(/\//g, '').trim();
       
-      // Construimos el SSML
-      // <phoneme> fuerza al modelo a leer los símbolos fonéticos
+      // Building SSML
+      // <phoneme> forces the model to read the phonetic symbols
       const ssmlText = `<speak><phoneme alphabet="ipa" ph="${cleanIPA}">${text}</phoneme></speak>`;
       
       inputPayload = { ssml: ssmlText };
       useSSML = true;
       console.log(`🔤 Usando IPA forzado para ${text}: [${cleanIPA}]`);
     } else {
-      // Fallback a texto plano con corrección manual si no hay IPA
+      // If no IPA is available, fall back to plain text with manual correction.
       let processedText = text.toLowerCase();
-      // Pequeño diccionario de emergencia por si Gemini falla
+      // Small emergency dictionary in case Gemini breaks/hallucinates
       if (processedText === 'idempotent') processedText = 'eye-dem-po-tent'; 
       inputPayload = { text: processedText };
     }
 
   } else {
-    // Para oraciones usamos Chirp (Leda) que prefiere texto plano
+    // For sentences Chirp (Leda) is preferable used, since it's plain text
     voiceName = "en-US-Chirp3-HD-Leda";
-    // Aseguramos punto final para buena prosodia
+    // Period is added for ensuring a good prosody
     let processedSent = text.trim();
     if (!processedSent.endsWith('.')) processedSent += '.';
     inputPayload = { text: processedSent };
@@ -291,8 +360,8 @@ function callGoogleTTS(text, filename, type, ipa = null) {
     },
     audioConfig: { 
       audioEncoding: "MP3",
-      // Studio (word) acepta ajustes, Chirp (sentence) los ignora
-      speakingRate: (type === "word") ? 1.0 : 1.0, 
+      // Studio (word) allows settings, Chirp (sentence) ignores them
+      speakingRate: (type === "word") ? 1.0 : 0.95, 
       pitch: 0.0,
       volumeGainDb: 1.0
     }
@@ -360,9 +429,9 @@ function ensureAnkiSheet() {
 
 function addToAnkiSheet(data) {
   const sheet = ensureAnkiSheet();
-  const finalTag = data.tag_mode; 
+  const finalTags = data.tags ? data.tags : data.tag_mode;
   sheet.appendRow([
-    Utilities.getUuid().substring(0, 8), new Date().toLocaleDateString(), data.palabra, data.definicion, data.ejemplo, data.contexto, data.tipo, 'NO', data.tag_mode, data.audioWord, data.image, data.audioSentence 
+    Utilities.getUuid().substring(0, 8), new Date().toLocaleDateString(), data.palabra, data.definicion, data.ejemplo, data.contexto, data.tipo, 'NO', finalTags, data.audioWord, data.image, data.audioSentence 
   ]);
 }
 
@@ -401,5 +470,5 @@ function prepareAnkiExport() {
     if (sourceSheet.getRange(i, statusIdx + 1).getValue() === 'NO') sourceSheet.getRange(i, statusIdx + 1).setValue('YES');
   }
   exportSheet.activate();
-  SpreadsheetApp.getUi().alert(`✅ Export listo.`);
+  SpreadsheetApp.getUi().alert(`✅ The export file is ready :D`);
 }
