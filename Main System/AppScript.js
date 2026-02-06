@@ -17,13 +17,31 @@ const CONFIG = {
 function initializeSystem() {
   ensureAnkiSheet();
   setupTrigger();
-  console.log('🚀 V5.0 System: Multimodal (Gemini + GPT-4o-mini + DALL-E 3).');
+  console.log('🚀 V5.1 System: Multimodal (Gemini + GPT-4o-mini + DALL-E 3/2).');
 }
 
 function setupTrigger() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
+
+  // Cleans old triggers to avoid duplicates
   ScriptApp.getProjectTriggers().forEach(t => ScriptApp.deleteTrigger(t));
-  ScriptApp.newTrigger('processFormSubmission').forSpreadsheet(ss).onFormSubmit().create();
+  
+  // 1. Main trigger (the one that proccesses the forms)
+  ScriptApp.newTrigger('processFormSubmission')
+    .forSpreadsheet(ss)
+    .onFormSubmit()
+    .create();
+    
+  // 2. Maintenance trigger (Runs every day at 1 am)
+  // This keeps the script alive in Google servers
+  ScriptApp.newTrigger('keepAlive')
+    .timeBased()
+    .everyDays(1)
+    .atHour(1)
+    .create();
+  
+  //Just to make sure
+  console.log("✅ Triggers set: FormSubmit and Daily Maintenance.");
 }
 
 // === HELPER: DRIVE SAVE ===
@@ -42,9 +60,23 @@ function saveFileToDrive(blob, filename, folderId) {
   }
 }
 
+//Checks if the trigger is still active
+function keepAlive() {
+  console.log("💓 Heartbeat: Keeping the system awake || checking triggers...");
+  
+  // Checks if the main trigger exists, if not, it'll recreate it
+  const triggers = ScriptApp.getProjectTriggers();
+  const hasFormTrigger = triggers.some(t => t.getHandlerFunction() === 'processFormSubmission');
+  
+  if (!hasFormTrigger) {
+    console.warn("⚠️ Trigger no encontrado. Reinstalando...");
+    setupTrigger();
+  }
+}
+
 // === 2. MAIN PROCESSOR ===
 function processFormSubmission(e) {
-  console.log("🏁 INITIALIZING PROCESS V5.0...");
+  console.log("🏁 INITIALIZING PROCESS V5.1...");
   
   // Extraction
   const wordData = extractFormData(e);
@@ -135,6 +167,7 @@ function processFormSubmission(e) {
     console.log("🎉 COMPLETE SUCCESS: Card saved.");
   } catch (err) { console.error("❌ Error Sheets:", err); }
 }
+
 // === 2.5 THE JUDGE ===
 function askGeminiIfNewMeaning(newData, oldDef, oldCtx) {
   const modelVersion = 'gemini-2.5-pro'; 
