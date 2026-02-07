@@ -7,10 +7,10 @@ const CONFIG = {
   OPENAI_API_KEY: PropertiesService.getScriptProperties().getProperty('OPENAI_API_KEY'),
 
   //Drive folder code for Audios
-  AUDIO_FOLDER_ID: '1HKTOv1SwgP4HYmKwY6O7A0XQyvr7ihrA', 
+  AUDIO_FOLDER_ID: PropertiesService.getScriptProperties().getProperty('AUDIO_FOLDER_ID'),
 
   //Drive folder code for Images
-  IMAGE_FOLDER_ID: '1TlEjDBQtyTYk0qBoalwkwCw3X8nA1Z4h'  
+  IMAGE_FOLDER_ID: PropertiesService.getScriptProperties().getProperty('IMAGE_FOLDER_ID'),
 };
 
 // === 1. INITIALIZATION ===
