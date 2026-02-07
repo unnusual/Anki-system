@@ -6,10 +6,10 @@ const CONFIG = {
   //OpenAI models API to generate audio
   OPENAI_API_KEY: PropertiesService.getScriptProperties().getProperty('OPENAI_API_KEY'),
 
-  //Drive folder code for Audios (replace with yours, otherwise it'll arrive to my folder)
+  //Drive folder code for Audios
   AUDIO_FOLDER_ID: '1HKTOv1SwgP4HYmKwY6O7A0XQyvr7ihrA', 
 
-  //Drive folder code for Images (same as above)
+  //Drive folder code for Images
   IMAGE_FOLDER_ID: '1TlEjDBQtyTYk0qBoalwkwCw3X8nA1Z4h'  
 };
 
@@ -64,7 +64,7 @@ function saveFileToDrive(blob, filename, folderId) {
 function keepAlive() {
   console.log("💓 Heartbeat: Keeping the system awake || checking triggers...");
   
-  // Checks if the main trigger exists, if not, it'll recreate it
+  // Checks if main trigger exists, if not it'll recreate it
   const triggers = ScriptApp.getProjectTriggers();
   const hasFormTrigger = triggers.some(t => t.getHandlerFunction() === 'processFormSubmission');
   
@@ -145,7 +145,7 @@ function processFormSubmission(e) {
     enriched.audioWord = ""; enriched.audioSentence = "";
   }
 
-  // === 4. IMAGEN (NUEVO FLUJO DALL-E) ===
+  // === 4. IMAGE (DALL-E) ===
   try {
     if (wordData.modo !== 'Solo Pronunciación') {
       console.log(`🎨 Generating visual prompt for: "${wordData.palabra}"...`);
@@ -379,7 +379,7 @@ function callGoogleTTS(text, filename, type, ipa = null) {
   } else {
     // For sentences Chirp (Leda) is preferable used, since it's plain text
     voiceName = "en-US-Chirp3-HD-Leda";
-    // Period is added for ensuring a good prosody
+    // Period is added to ensure a good prosody
     let processedSent = text.trim();
     if (!processedSent.endsWith('.')) processedSent += '.';
     inputPayload = { text: processedSent };
@@ -413,7 +413,7 @@ function callGoogleTTS(text, filename, type, ipa = null) {
 
     if (response.getResponseCode() !== 200) {
       console.error(`❌ Error API (${voiceName}): ${json.error ? json.error.message : "Desconocido"}`);
-      // Fallback: Si falla el SSML (IPA inválido), reintentamos con texto plano
+      // Fallback: if SSML fails (invalid IPA), then it'd retry with plain text
       if (useSSML) {
         console.warn("🔄 Reintentando sin SSML...");
         return callGoogleTTS(text, filename, type, null);
@@ -436,23 +436,28 @@ function cleanFilename(text) {
 }
 
 function extractFormData(e) {
-  if (!e || !e.namedValues) return { palabra: "TEST", contexto: "Test context", modo: "Vocabulario General" };
-  const vals = e.namedValues;
-  return {
-    palabra: vals['Palabra o frase que quieres aprender'] ? vals['Palabra o frase que quieres aprender'][0].trim() : '',
-    contexto: vals['Contexto u oración donde la viste (opcional)'] ? vals['Contexto u oración donde la viste (opcional)'][0].trim() : '',
-    tipo: vals['Tipo de palabra (opcional)'] ? vals['Tipo de palabra (opcional)'][0].trim() : '',
-    modo: vals['Modo de Estudio'] ? vals['Modo de Estudio'][0].trim() : 'Vocabulario General'
+  // Guard clause, this is just for testing and debugging, in case the function is executed manual from here (because then 'e' would be undefined, since no forms was filled and would cause a critical error)
+  if (!e || !e.values) return { palabra: "TEST", contexto: "Test context", modo: "Genreal Vocab" };
+  const vals = e.values;
+  return { // each number represents their respective field on the google forms
+    word: vals[1] ? vals[1].trim() : '',
+    context: vals[2] ? vals[2].trim() : '',
+    mode: vals[3] ? vals[3].trim() : 'General Vocab',
+    type: vals[4] ? vals[4].trim() : ''
   };
 }
 
 function ensureAnkiSheet() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
-  let sheet = ss.getSheetByName('Anki') || ss.insertSheet('Anki');
-  if (!sheet) { sheet = ss.insertSheet('Anki'); }
-  const headers = ['ID', 'Date', 'Word', 'Definition', 'Example', 'Context', 'Type', 'Imported', 'Tags', 'Audio_Word', 'Image', 'Audio_Sentence'];
   const firstCell = sheet.getRange(1, 1).getValue();
-  if (sheet.getLastRow() === 0 || sheet.getRange(1, 1).getValue() !== 'ID') {
+  const headers = ['ID', 'Date', 'Word', 'Definition', 'Example', 'Context', 'Type', 'Imported', 'Tags', 'Audio_Word', 'Image', 'Audio_Sentence'];
+  let sheet = ss.getSheetByName('Anki') || ss.insertSheet('Anki');
+
+  if (!sheet) { 
+    sheet = ss.insertSheet('Anki'); 
+  }
+
+  if (sheet.getLastRow() === 0 || firstCell !== 'ID') {
     sheet.getRange(1, 1, 1, headers.length).setValues([headers])
       .setFontWeight('bold').setBackground('#0d47a1').setFontColor('white');
       sheet.setFrozenRows(1);
