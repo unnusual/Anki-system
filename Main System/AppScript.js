@@ -83,8 +83,8 @@ function processFormSubmission(e) {
   // Extraction
   const wordData = extractFormData(e);
   try {
-    if (!wordData.palabra) { console.warn("⚠️ Word not found"); return; }
-    console.log(`📌 Processing: "${wordData.palabra}"`);
+    if (!wordData.word) { console.warn("⚠️ Word not found"); return; }
+    console.log(`📌 Processing: "${wordData.word}"`);
   } catch (err) { console.error("❌ Error Data:", err); return; }
 
   // --- 🛡️ SMART DEDUPLICATION LOGIC ---
@@ -92,7 +92,7 @@ function processFormSubmission(e) {
   const allData = sheet.getDataRange().getValues();
 
   const existingRow = allData.find(row => 
-    row[2] && row[2].toString().toLowerCase() === wordData.palabra.toLowerCase()
+    row[2] && row[2].toString().toLowerCase() === wordData.word.toLowerCase()
   );
 
   let isPolysemy = false; // Flag for knowing if it's a new meaning
@@ -108,7 +108,7 @@ function processFormSubmission(e) {
 
     if (!contextAnalysis.is_different) {
       // CASE 1: It's the same -> Reject
-      const msg = `The word "${wordData.palabra}" already exists with the same meanign: "${oldDef}". Duplicate won't be created.`;
+      const msg = `The word "${wordData.word}" already exists with the same meanign: "${oldDef}". Duplicate won't be created.`;
       console.warn(`⛔ REJECTED: ${msg}`);
       return; // The process stops here
     } else {
@@ -128,17 +128,17 @@ function processFormSubmission(e) {
   // === 3. AUDIO (Google Cloud TTS) ===
   try {
     const uniqueSuffix = isPolysemy ? "_v2" : ""; //This avoid overwriting the audio in case it already exists
-    const wordFilename = `word_${cleanFilename(wordData.palabra)}.mp3`;
+    const wordFilename = `word_${cleanFilename(wordData.word)}.mp3`;
     
     // IPA is sent as 4th argument 
     // If Gemini didn't generate the IPA, we send null to use default pronunciation
-    enriched.audioWord = callGoogleTTS(wordData.palabra, wordFilename, "word", enriched.ipa); 
+    enriched.audioWord = callGoogleTTS(wordData.word, wordFilename, "word", enriched.ipa); 
     
-    if (enriched.ejemplo_raw && wordData.modo !== 'Solo Pronunciación') {
+    if (enriched.example_raw && wordData.mode !== 'Pronunciation Only') {
       console.log("🔹 Generating phrase audio with Google tts...");
-      const sentenceFilename = `sent_${cleanFilename(wordData.palabra)}.mp3`;
+      const sentenceFilename = `sent_${cleanFilename(wordData.word)}.mp3`;
       // Phrases don't carry forced IPA, would be too complex
-      enriched.audioSentence = callGoogleTTS(enriched.ejemplo_raw, sentenceFilename, "sentence"); 
+      enriched.audioSentence = callGoogleTTS(enriched.example_raw, sentenceFilename, "sentence"); 
     } else {
       enriched.audioSentence = "";
     }
@@ -149,11 +149,11 @@ function processFormSubmission(e) {
 
   // === 4. IMAGE (DALL-E) ===
   try {
-    if (wordData.modo !== 'Solo Pronunciación') {
-      console.log(`🎨 Generating visual prompt for: "${wordData.palabra}"...`);
+    if (wordData.mode !== 'Pronunciation Only') {
+      console.log(`🎨 Generating visual prompt for: "${wordData.word}"...`);
       // GPT-4o-mini refines the Gemini query for DALL-E
       const visualPrompt = generateVisualPrompt(enriched);
-      const imgFilename = `img_${cleanFilename(wordData.palabra)}.png`;
+      const imgFilename = `img_${cleanFilename(wordData.word)}.png`;
       enriched.image = callOpenAIDalle(visualPrompt, imgFilename);
     } else {
       enriched.image = "";
@@ -179,13 +179,13 @@ function askGeminiIfNewMeaning(newData, oldDef, oldCtx) {
     You are a strict linguistic judge avoiding duplicates in a database.
     
     EXISTING ENTRY:
-    - Word: "${newData.palabra}"
+    - Word: "${newData.word}"
     - Definition: "${oldDef}"
     - Context used: "${oldCtx}"
 
     NEW INPUT:
-    - Word: "${newData.palabra}"
-    - New Context: "${newData.contexto}"
+    - Word: "${newData.word}"
+    - New Context: "${newData.context}"
 
     TASK: 
     Analyze if the New Context implies a SIGNIFICANTLY DIFFERENT meaning (e.g., Phrasal Verb variation, Polysemy, Noun vs Verb) compared to the Existing Definition.
@@ -225,17 +225,17 @@ function callGeminiAnalyst(wordData, isPolysemy = false) {
   let promptText = "";
   
   // 🎤 Pronunciation Mode:  cloze is forced
-  if (wordData.modo === 'Solo Pronunciación') {
+  if (wordData.mode === 'Pronunciation Only') {
     promptText = `
-      You are a linguistic engine. Analyze: "${wordData.palabra}". Context: "${wordData.contexto}".
+      You are a linguistic engine. Analyze: "${wordData.word}". Context: "${wordData.context}".
       TASK: Create Pronunciation data for an Anki Cloze card.
       CRITICAL: You MUST use the cloze format {{c1::word}} in the 'example' field.
       JSON Schema:
       {
         "definition": "IPA transcription (e.g. /wɜːrd/).",
         "ipa": "ˌaɪ.dəmˈpoʊ.tənt",
-        "example": "Pronunciation tip for {{c1::${wordData.palabra}}}: [Insert tip regarding stress/linking]",
-        "example_raw": "Pronunciation tip for ${wordData.palabra}: [Insert tip regarding stress/linking]",
+        "example": "Pronunciation tip for {{c1::${wordData.word}}}: [Insert tip regarding stress/linking]",
+        "example_raw": "Pronunciation tip for ${wordData.word}: [Insert tip regarding stress/linking]",
         "type": "Part of speech",
         "image_query": null
       }
@@ -244,7 +244,7 @@ function callGeminiAnalyst(wordData, isPolysemy = false) {
   } else {
     promptText = `
       You are an expert IELTS vocabulary tutor.
-      INPUT: Word: "${wordData.palabra}", Context: "${wordData.contexto}".
+      INPUT: Word: "${wordData.word}", Context: "${wordData.context}".
       TASK: Create Anki card JSON.
       RULES:
       1. Use Context to understand meaning.
@@ -284,12 +284,12 @@ function callGeminiAnalyst(wordData, isPolysemy = false) {
   let finalExample = result.example;
   // if it's not, we force the format at the beginning so that anki doesn't fail.
   if (finalExample && !finalExample.includes('{{c1::')) {
-      const escapedWord = wordData.palabra.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const escapedWord = wordData.word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       const regex = new RegExp(`(${escapedWord})`, 'gi');
       if (regex.test(finalExample)) {
           finalExample = finalExample.replace(regex, '{{c1::$1}}');
       } else {
-          finalExample = `Note on {{c1::${wordData.palabra}}}: ${finalExample}`;
+          finalExample = `Note on {{c1::${wordData.word}}}: ${finalExample}`;
       }
   }
 
@@ -298,14 +298,14 @@ function callGeminiAnalyst(wordData, isPolysemy = false) {
 
   return {
     ...wordData, 
-    definicion: result.definition,
+    definition: result.definition,
     ipa: result.ipa,
-    ejemplo: finalExample, 
-    ejemplo_raw: result.example_raw, 
-    tipo: result.type,
+    example: finalExample, 
+    example_raw: result.example_raw, 
+    type: result.type,
     tags: tags,
     image_query: result.image_query,
-    tag_mode: wordData.modo === 'Solo Pronunciación' ? 'pronunciation' : 'general_vocab'
+    tag_mode: wordData.mode === 'Pronunciation Only' ? 'pronunciation' : 'general_vocab'
   };
 }
 
@@ -317,7 +317,7 @@ function generateVisualPrompt(enriched) {
     model: "gpt-4o-mini",
     messages: [
       { role: "system", content: "You are a visual architect. Create a DALL-E 3 prompt. No text in image. Style: 3D render or photography." },
-      { role: "user", content: `Word: ${enriched.palabra}. Meaning: ${enriched.definicion}. Example: ${enriched.ejemplo_raw}. Create a descriptive prompt.` }
+      { role: "user", content: `Word: ${enriched.word}. Meaning: ${enriched.definition}. Example: ${enriched.example_raw}. Create a descriptive prompt.` }
     ]
   };
   const options = {
@@ -439,7 +439,7 @@ function cleanFilename(text) {
 
 function extractFormData(e) {
   // Guard clause, this is just for testing and debugging, in case the function is executed manual from here (because then 'e' would be undefined, since no forms was filled and would cause a critical error)
-  if (!e || !e.values) return { palabra: "TEST", contexto: "Test context", modo: "Genreal Vocab" };
+  if (!e || !e.values) return { word: "TEST", context: "Test context", mode: "General Vocab" };
   const vals = e.values;
   return { // each number represents their respective field on the google forms
     word: vals[1] ? vals[1].trim() : '',
@@ -471,7 +471,7 @@ function addToAnkiSheet(data) {
   const sheet = ensureAnkiSheet();
   const finalTags = data.tags ? data.tags : data.tag_mode;
   sheet.appendRow([
-    Utilities.getUuid().substring(0, 8), new Date().toLocaleDateString(), data.palabra, data.definicion, data.ejemplo, data.contexto, data.tipo, 'NO', finalTags, data.audioWord, data.image, data.audioSentence 
+    Utilities.getUuid().substring(0, 8), new Date().toLocaleDateString(), data.word, data.definition, data.example, data.context, data.type, 'NO', finalTags, data.audioWord, data.image, data.audioSentence 
   ]);
 }
 
