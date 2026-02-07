@@ -52,8 +52,10 @@ function saveFileToDrive(blob, filename, folderId) {
       parents: [{id: folderId}],
       mimeType: blob.getContentType()
     };
+
     Drive.Files.insert(fileMetadata, blob);
     return true; 
+
   } catch (e) {
     console.error(`❌ Error saving archive ${filename}: ${e.message}`);
     throw e;
@@ -449,9 +451,9 @@ function extractFormData(e) {
 
 function ensureAnkiSheet() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sheet = ss.getSheetByName('Anki') || ss.insertSheet('Anki');
   const firstCell = sheet.getRange(1, 1).getValue();
   const headers = ['ID', 'Date', 'Word', 'Definition', 'Example', 'Context', 'Type', 'Imported', 'Tags', 'Audio_Word', 'Image', 'Audio_Sentence'];
-  let sheet = ss.getSheetByName('Anki') || ss.insertSheet('Anki');
 
   if (!sheet) { 
     sheet = ss.insertSheet('Anki'); 
